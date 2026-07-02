@@ -1,0 +1,7 @@
+Flask
+waitress
+yt-dlp
+requests
+psutil
+tqdm
+static-ffmpeg

@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>YT Downloader v7</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- HEADER -->
+  <header class="header">
+    <div class="header-inner">
+      <div class="brand">
+        <div class="brand-icon">▼</div>
+        <span class="brand-name">YT Downloader</span>
+        <span class="brand-ver">v7</span>
+      </div>
+
+      <div class="live-stats">
+        <div class="stat-chip" id="stat-queued">
+          <span class="stat-num" id="stat-queued-n">0</span>
+          <span class="stat-lbl">queued</span>
+        </div>
+        <div class="stat-chip stat-chip--active" id="stat-downloading">
+          <span class="stat-num" id="stat-downloading-n">0</span>
+          <span class="stat-lbl">downloading</span>
+        </div>
+        <div class="stat-chip stat-chip--done" id="stat-completed">
+          <span class="stat-num" id="stat-completed-n">0</span>
+          <span class="stat-lbl">done</span>
+        </div>
+        <div class="stat-chip stat-chip--fail" id="stat-failed">
+          <span class="stat-num" id="stat-failed-n">0</span>
+          <span class="stat-lbl">failed</span>
+        </div>
+      </div>
+
+      <div class="header-right">
+        <span class="server-pill" id="server-pill">● online</span>
+        <button class="btn-icon" id="theme-btn" title="Toggle theme">◑</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="layout">
+
+    <!-- SIDEBAR: new download form -->
+    <aside class="sidebar">
+
+      <div class="cookie-bar" id="cookie-bar">
+        <span id="cookie-icon">🔓</span>
+        <span id="cookie-text">Cookies not synced</span>
+        <button class="btn-text" id="cookie-clear-btn" style="display:none">Remove</button>
+      </div>
+
+      <section class="form-card">
+        <h2 class="form-title">New download</h2>
+
+        <div class="field">
+          <input class="url-input" id="url-input" type="text"
+            placeholder="Paste a YouTube link — video, shorts, playlist, search, channel" />
+          <div class="url-hint" id="url-hint"></div>
+        </div>
+
+        <div class="field">
+          <label class="field-label">Format</label>
+          <div class="seg" id="format-seg">
+            <label class="seg-opt">
+              <input type="radio" name="format" value="MP4" checked>
+              <span>MP4 <small>video</small></span>
+            </label>
+            <label class="seg-opt">
+              <input type="radio" name="format" value="MP3">
+              <span>MP3 <small>audio</small></span>
+            </label>
+            <label class="seg-opt">
+              <input type="radio" name="format" value="3GP">
+              <span>3GP <small>mobile</small></span>
+            </label>
+          </div>
+        </div>
+
+        <div class="field">
+          <label class="field-label">Quality</label>
+          <select class="quality-select" id="quality-select"></select>
+        </div>
+
+        <div class="field hidden" id="qty-row">
+          <label class="field-label">Result count</label>
+          <div class="seg">
+            <label class="seg-opt"><input type="radio" name="quantity" value="25" checked><span>25</span></label>
+            <label class="seg-opt"><input type="radio" name="quantity" value="50"><span>50</span></label>
+            <label class="seg-opt"><input type="radio" name="quantity" value="75"><span>75</span></label>
+            <label class="seg-opt"><input type="radio" name="quantity" value="100"><span>100</span></label>
+          </div>
+        </div>
+
+        <div class="field hidden" id="scope-row">
+          <label class="field-label">Download scope</label>
+          <div class="seg">
+            <label class="seg-opt"><input type="radio" name="playlist" value="false" checked><span>This video only</span></label>
+            <label class="seg-opt"><input type="radio" name="playlist" value="true"><span>Whole playlist</span></label>
+          </div>
+        </div>
+
+        <button class="btn-primary" id="download-btn" disabled>
+          <span id="download-btn-label">Download</span>
+          <span class="scan-spinner hidden" id="scan-spinner">scanning…</span>
+        </button>
+      </section>
+
+    </aside>
+
+    <!-- MAIN: tabs -->
+    <main class="main">
+
+      <nav class="tab-bar">
+        <button class="tab active" data-tab="queue">Queue</button>
+        <button class="tab" data-tab="history">History</button>
+        <button class="tab" data-tab="settings">Settings</button>
+      </nav>
+
+      <!-- QUEUE TAB -->
+      <div class="tab-panel active" id="tab-queue">
+        <div class="panel-head">
+          <span class="panel-count" id="job-count">0 jobs</span>
+          <div class="panel-actions">
+            <button class="toggle-btn" id="group-view-toggle" data-active="false" title="Group by playlist/channel">
+              ☰ Group view
+            </button>
+          </div>
+        </div>
+        <div id="queue-list" class="job-list">
+          <div class="empty-state">
+            <div class="empty-icon">⬇</div>
+            <p>No downloads yet.<br>Paste a link to get started.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- HISTORY TAB -->
+      <div class="tab-panel" id="tab-history">
+        <div class="panel-head">
+          <span class="panel-count" id="history-count">0 items</span>
+          <div class="panel-actions">
+            <button class="toggle-btn" id="history-group-toggle" data-active="false" title="Group by playlist/channel">
+              ☰ Group view
+            </button>
+          </div>
+        </div>
+        <div id="history-list" class="job-list">
+          <div class="empty-state">
+            <div class="empty-icon">📋</div>
+            <p>No completed downloads yet.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- SETTINGS TAB -->
+      <div class="tab-panel" id="tab-settings">
+        <div class="settings-grid">
+
+          <div class="settings-card">
+            <h3>Download</h3>
+            <div class="setting-row">
+              <label>Concurrent downloads</label>
+              <select id="setting-concurrent">
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3" selected>3</option>
+                <option value="4">4</option>
+                <option value="5">5</option>
+                <option value="6">6</option>
+                <option value="7">7</option>
+                <option value="8">8</option>
+                <option value="9">9</option>
+                <option value="10">10</option>
+              </select>
+            </div>
+            <div class="setting-row">
+              <label>Default format</label>
+              <select id="setting-format">
+                <option value="MP4">MP4</option>
+                <option value="MP3">MP3</option>
+                <option value="3GP">3GP</option>
+              </select>
+            </div>
+            <button class="btn-save" id="save-settings-btn">Save settings</button>
+            <span class="save-feedback hidden" id="save-feedback">✓ Saved</span>
+          </div>
+
+          <div class="settings-card">
+            <h3>Cookie sync</h3>
+            <p class="settings-note">
+              Install the browser extension and tap "Sync YouTube Cookies" to enable
+              age-restricted / private video downloads. By default the app never uses cookies.
+            </p>
+            <div class="cookie-status-block" id="cookie-settings-status">Checking…</div>
+            <button class="btn-danger" id="clear-cookies-btn">Remove cookies</button>
+          </div>
+
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

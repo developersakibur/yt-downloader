@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "YT Downloader v7",
+  "version": "7.0",
+  "description": "Queue YouTube videos, playlists, channels and searches to your local download manager.",
+  "permissions": ["tabs", "cookies"],
+  "host_permissions": [
+    "http://127.0.0.1:5000/*",
+    "*://*.youtube.com/*",
+    "*://*.google.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": { "128": "icon.png" }
+  },
+  "icons": { "128": "icon.png" }
+}
