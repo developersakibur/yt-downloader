@@ -112,3 +112,29 @@ FROM video_jobs vj
 LEFT JOIN groups g ON g.id = vj.group_id
 WHERE vj.status IN ('completed', 'failed', 'cancelled')
 ORDER BY vj.updated_at DESC;
+
+-- ---------------------------------------------------------------
+-- LOCAL BATCH CONVERTER
+-- Completely separate from video_jobs — this never touches the
+-- download pipeline. Each row is one existing local file being
+-- converted to MP3 or 3GP. batch_id groups everything from one
+-- "Convert" click so the UI can show/poll just that run.
+-- ---------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS local_conversion_jobs (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id            TEXT NOT NULL,
+    source_path         TEXT NOT NULL,
+    source_filename     TEXT NOT NULL,
+    target_format       TEXT NOT NULL CHECK (target_format IN ('MP3', '3GP')),
+    quality             TEXT NOT NULL DEFAULT 'best',
+    status              TEXT NOT NULL DEFAULT 'queued' CHECK (status IN (
+                            'queued', 'converting', 'completed', 'failed', 'skipped'
+                        )),
+    progress_percent    REAL NOT NULL DEFAULT 0,
+    output_path         TEXT,
+    error_message       TEXT,
+    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_local_conv_batch ON local_conversion_jobs(batch_id);

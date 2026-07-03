@@ -112,6 +112,42 @@
         </button>
       </section>
 
+      <section class="form-card converter-card">
+        <h2 class="form-title">Batch convert (local files)</h2>
+
+        <div class="field">
+          <label class="field-label">Folder path</label>
+          <input class="path-text-input" id="convert-path-input" type="text"
+            placeholder="Paste a folder path, e.g. D:\Videos" />
+        </div>
+
+        <div class="field">
+          <label class="field-label">Convert</label>
+          <select class="quality-select" id="convert-target-select">
+            <option value="MP3">Any video → MP3</option>
+            <option value="3GP">Any video → 3GP</option>
+          </select>
+        </div>
+
+        <div class="field">
+          <label class="field-label">Quality</label>
+          <select class="quality-select" id="convert-quality-select"></select>
+        </div>
+
+        <div class="field">
+          <label class="checkbox-row">
+            <input type="checkbox" id="convert-recursive">
+            <span>Include subfolders</span>
+          </label>
+        </div>
+
+        <button class="btn-primary" id="convert-btn">
+          <span id="convert-btn-label">Convert</span>
+          <span class="scan-spinner hidden" id="convert-spinner">starting…</span>
+        </button>
+        <div class="convert-hint" id="convert-hint"></div>
+      </section>
+
     </aside>
 
     <!-- MAIN: tabs -->
@@ -120,6 +156,7 @@
       <nav class="tab-bar">
         <button class="tab active" data-tab="queue">Queue</button>
         <button class="tab" data-tab="history">History</button>
+        <button class="tab" data-tab="convert">Convert</button>
         <button class="tab" data-tab="settings">Settings</button>
       </nav>
 
@@ -155,6 +192,19 @@
           <div class="empty-state">
             <div class="empty-icon">📋</div>
             <p>No completed downloads yet.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- CONVERT TAB -->
+      <div class="tab-panel" id="tab-convert">
+        <div class="panel-head">
+          <span class="panel-count" id="convert-count">No batch running</span>
+        </div>
+        <div id="convert-list" class="job-list">
+          <div class="empty-state">
+            <div class="empty-icon">🔄</div>
+            <p>No conversions yet.<br>Use the "Batch convert" form on the left.</p>
           </div>
         </div>
       </div>

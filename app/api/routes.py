@@ -20,13 +20,14 @@ from flask import Blueprint, request, jsonify
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _APP_DIR = os.path.dirname(_THIS_DIR)
-for sub in ("database", "cookies", "downloader", "scanner"):
+for sub in ("database", "cookies", "downloader", "scanner", "converter"):
     sys.path.insert(0, os.path.join(_APP_DIR, sub))
 
 import database as db    # noqa: E402
 import cookies as ck     # noqa: E402
 import job_queue as q        # noqa: E402
 import scanner            # noqa: E402
+import converter           # noqa: E402
 
 api = Blueprint("api", __name__, url_prefix="/api")
 
@@ -281,3 +282,50 @@ def get_stats():
 @api.route("/status")
 def get_status():
     return jsonify({"ok": True})
+
+
+# ---------------------------------------------------------------
+# LOCAL BATCH CONVERTER
+# Separate from the download pipeline entirely — see converter.py.
+# ---------------------------------------------------------------
+
+_CONVERT_QUALITIES = {
+    "MP3": ("192k", "320k", "256k", "128k", "96k"),
+    "3GP": ("320x240", "352x288", "176x144"),
+}
+
+
+@api.route("/local-convert", methods=["POST"])
+def start_local_convert():
+    data = request.get_json(silent=True) or {}
+    path = (data.get("path") or "").strip()
+    target_format = (data.get("target_format") or "").upper()
+    recursive = bool(data.get("recursive", False))
+
+    if not path:
+        return jsonify({"ok": False, "error": "path required"}), 400
+    if target_format not in _CONVERT_QUALITIES:
+        return jsonify({"ok": False, "error": "target_format must be MP3 or 3GP"}), 400
+    if not os.path.isdir(path):
+        return jsonify({"ok": False, "error": f"Not a folder: {path}"}), 400
+
+    quality = data.get("quality") or _CONVERT_QUALITIES[target_format][0]
+    if quality not in _CONVERT_QUALITIES[target_format]:
+        quality = _CONVERT_QUALITIES[target_format][0]
+
+    try:
+        result = converter.start_batch(path, target_format, quality, recursive=recursive)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"Could not start conversion: {e}"}), 500
+
+    return jsonify({"ok": True, **result})
+
+
+@api.route("/local-convert/jobs")
+def get_local_convert_jobs():
+    batch_id = request.args.get("batch_id", "")
+    if not batch_id:
+        return jsonify({"ok": False, "error": "batch_id required"}), 400
+    return jsonify({"ok": True, "jobs": converter.list_batch_jobs(batch_id)})

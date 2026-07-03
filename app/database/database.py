@@ -305,3 +305,69 @@ def get_history(limit=100):
     with cursor() as cur:
         cur.execute("SELECT * FROM history_view LIMIT ?", (limit,))
         return _rows_to_dicts(cur.fetchall())
+
+
+# =================================================================
+# LOCAL BATCH CONVERTER
+# Separate table, separate lifecycle from video_jobs — see schema.sql.
+# =================================================================
+
+def create_local_conversion_job(batch_id, source_path, source_filename,
+                                 target_format, quality, output_path, status="queued"):
+    with cursor(write=True) as cur:
+        cur.execute(
+            """INSERT INTO local_conversion_jobs
+               (batch_id, source_path, source_filename, target_format,
+                quality, output_path, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (batch_id, source_path, source_filename, target_format,
+             quality, output_path, status),
+        )
+        return cur.lastrowid
+
+
+def claim_next_local_conversion_job(batch_id):
+    """Same atomic SELECT-then-UPDATE pattern as claim_next_queued_job()
+    for video_jobs — prevents two converter workers grabbing the same
+    file. Scoped to one batch so workers from an old batch never pick
+    up a newer one's jobs."""
+    with cursor(write=True) as cur:
+        cur.execute(
+            "SELECT id FROM local_conversion_jobs "
+            "WHERE batch_id = ? AND status = 'queued' "
+            "ORDER BY id ASC LIMIT 1",
+            (batch_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        job_id = row["id"]
+        cur.execute(
+            """UPDATE local_conversion_jobs
+               SET status = 'converting', updated_at = ?
+               WHERE id = ? AND status = 'queued'""",
+            (_now(), job_id),
+        )
+        if cur.rowcount == 0:
+            return None  # another worker grabbed it first
+        cur.execute("SELECT * FROM local_conversion_jobs WHERE id = ?", (job_id,))
+        return _row_to_dict(cur.fetchone())
+
+
+def update_local_conversion_job(job_id, **fields):
+    if not fields:
+        return
+    fields["updated_at"] = _now()
+    cols = ", ".join(f"{k} = ?" for k in fields)
+    values = list(fields.values()) + [job_id]
+    with cursor(write=True) as cur:
+        cur.execute(f"UPDATE local_conversion_jobs SET {cols} WHERE id = ?", values)
+
+
+def list_local_conversion_jobs(batch_id):
+    with cursor() as cur:
+        cur.execute(
+            "SELECT * FROM local_conversion_jobs WHERE batch_id = ? ORDER BY id ASC",
+            (batch_id,),
+        )
+        return _rows_to_dicts(cur.fetchall())

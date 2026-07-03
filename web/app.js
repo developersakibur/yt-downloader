@@ -580,6 +580,121 @@ cookieClearBtn.addEventListener("click", async () => {
   fetchCookies();
 });
 
+// ── Local Batch Converter ────────────────────────────────────
+const convertPathInput     = document.getElementById("convert-path-input");
+const convertTargetSelect  = document.getElementById("convert-target-select");
+const convertQualitySelect = document.getElementById("convert-quality-select");
+const convertRecursive     = document.getElementById("convert-recursive");
+const convertBtn           = document.getElementById("convert-btn");
+const convertBtnLabel      = document.getElementById("convert-btn-label");
+const convertSpinner       = document.getElementById("convert-spinner");
+const convertHint          = document.getElementById("convert-hint");
+const convertCount         = document.getElementById("convert-count");
+const convertList          = document.getElementById("convert-list");
+
+let activeConvertBatchId = null;
+let convertPollTimer     = null;
+
+function populateConvertQualityOptions() {
+  const target = convertTargetSelect.value; // "MP3" or "3GP"
+  const opts = QUALITY_OPTIONS[target] || QUALITY_OPTIONS.MP3;
+  convertQualitySelect.innerHTML = opts.map(o => `<option value="${o.value}">${o.label}</option>`).join("");
+}
+convertTargetSelect.addEventListener("change", populateConvertQualityOptions);
+populateConvertQualityOptions();
+
+function renderConvertJobs(jobs) {
+  if (!jobs.length) {
+    convertList.innerHTML = `<div class="empty-state"><div class="empty-icon">🔄</div><p>No conversions yet.<br>Use the "Batch convert" form on the left.</p></div>`;
+    return;
+  }
+  convertList.innerHTML = jobs.map(j => `
+    <div class="job-card" data-status="${j.status}">
+      <div class="job-card-inner">
+        <div class="job-card-body">
+          <div class="job-header">
+            <div class="job-title" title="${esc(j.source_filename)}">${esc(j.source_filename)}</div>
+            <div class="job-header-right"><span class="badge ${badgeClass(j.status)}">${j.status}</span></div>
+          </div>
+          <div class="job-meta-row">
+            <div class="job-meta"><span>${j.target_format}</span><span>${j.quality}</span></div>
+          </div>
+          <div class="progress-track"><div class="progress-fill" style="width:${j.progress_percent || 0}%"></div></div>
+          ${j.status === "failed" && j.error_message ? `<div class="job-error">${esc(j.error_message)}</div>` : ""}
+        </div>
+      </div>
+    </div>`).join("");
+}
+
+async function pollConvertBatch() {
+  if (!activeConvertBatchId) return;
+  try {
+    const res  = await fetch(`${API}/api/local-convert/jobs?batch_id=${activeConvertBatchId}`);
+    const data = await res.json();
+    if (!data.ok) return;
+    const jobs = data.jobs;
+    renderConvertJobs(jobs);
+
+    const done      = jobs.filter(j => j.status === "completed").length;
+    const failed    = jobs.filter(j => j.status === "failed").length;
+    const skipped   = jobs.filter(j => j.status === "skipped").length;
+    const remaining = jobs.filter(j => j.status === "queued" || j.status === "converting").length;
+
+    convertCount.textContent = remaining > 0
+      ? `Converting… ${done + failed + skipped}/${jobs.length} done`
+      : `${done} converted · ${skipped} skipped · ${failed} failed`;
+
+    if (remaining === 0 && convertPollTimer) {
+      clearInterval(convertPollTimer);
+      convertPollTimer = null;
+    }
+  } catch {}
+}
+
+convertBtn.addEventListener("click", async () => {
+  const path = convertPathInput.value.trim();
+  if (!path) {
+    convertHint.textContent = "Enter a folder path first.";
+    convertHint.classList.add("error");
+    return;
+  }
+  convertHint.textContent = "";
+  convertHint.classList.remove("error");
+  convertBtn.disabled = true;
+  convertBtnLabel.classList.add("hidden");
+  convertSpinner.classList.remove("hidden");
+
+  try {
+    const res = await fetch(`${API}/api/local-convert`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        path,
+        target_format: convertTargetSelect.value,
+        quality: convertQualitySelect.value,
+        recursive: convertRecursive.checked,
+      }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Could not start conversion");
+
+    activeConvertBatchId = data.batch_id;
+    convertHint.textContent = `Found ${data.total} file(s) — ${data.queued} queued, ${data.skipped} already done.`;
+
+    // switch to the Convert tab so the person sees progress immediately
+    document.querySelector('.tab[data-tab="convert"]').click();
+
+    if (convertPollTimer) clearInterval(convertPollTimer);
+    pollConvertBatch();
+    convertPollTimer = setInterval(pollConvertBatch, 1500);
+  } catch (e) {
+    convertHint.textContent = `❌ ${e.message}`;
+    convertHint.classList.add("error");
+  }
+  convertBtn.disabled = false;
+  convertBtnLabel.classList.remove("hidden");
+  convertSpinner.classList.add("hidden");
+});
+
 // ── Boot + polling ────────────────────────────────────────────
 fetchQueue();
 fetchCookies();
