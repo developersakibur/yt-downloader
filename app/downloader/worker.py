@@ -109,18 +109,20 @@ def sanitize_name(name: str) -> str:
 def ensure_group_folder(job: dict) -> str:
     """Return the final save folder for a job, creating it if needed.
 
-    Structure:
-        <downloads_root>/          ← single video, no group
-            MP4/
-            MP3/
-            3GP/
-        <downloads_root>/<Group>/  ← playlist / channel / search
-            MP4/
-            MP3/
-            3GP/
+    Structure (flat — no nested subfolders):
+        <downloads_root>/MP4/                    ← single video, no group
+        <downloads_root>/MP3/
+        <downloads_root>/3GP/
+        <downloads_root>/MP4 - <Group Name>/      ← playlist / channel / search
+        <downloads_root>/MP3 - <Group Name>/
+        <downloads_root>/3GP - <Group Name>/
 
-    Format subfolder ensures MP3, MP4 and 3GP from the same source
-    never collide even when downloaded separately.
+    Format is baked into the folder name itself (not a subfolder), so
+    downloading the same playlist in three formats produces three
+    separate flat folders side by side in the root — never one folder
+    containing three format subfolders. This is safe because every
+    scan() call creates its own Group row with a single format that
+    never changes for that group's jobs.
     """
     fmt = job.get("format", "MP4").upper()
     root = get_downloads_root()
@@ -131,21 +133,22 @@ def ensure_group_folder(job: dict) -> str:
         return folder
 
     group = db.get_group(job["group_id"])
-    # group_path stored without format subdir — we add it per job
-    group_root = group.get("folder_path")
-    if not group_root:
-        group_root = os.path.join(root, sanitize_name(group["name"]))
-        db.update_group(group["id"], folder_path=group_root)
+    folder = group.get("folder_path")
+    if not folder:
+        folder = os.path.join(root, f"{fmt} - {sanitize_name(group['name'])}")
+        db.update_group(group["id"], folder_path=folder)
 
-    folder = os.path.join(group_root, fmt)
     os.makedirs(folder, exist_ok=True)
     return folder
 
 
 def build_filename(job: dict, ext: str) -> str:
-    # Original YouTube title only — no index prefix, no modification beyond sanitize
+    # Title + quality suffix — always present (even "[best]"), so the
+    # same video downloaded at two different qualities never collides
+    # on the same filename and silently overwrites one another.
     title = sanitize_name(job.get("original_title") or job.get("video_id") or "video")
-    return f"{title}{ext}"
+    quality = job.get("quality") or "best"
+    return f"{title} [{quality}]{ext}"
 
 
 # ---------------------------------------------------------------

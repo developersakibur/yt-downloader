@@ -144,6 +144,28 @@ body {
   border-radius: 5px; color: var(--text);
   font-size: 12px; cursor: pointer; outline: none;
 }
+.qty-control { display: flex; align-items: center; gap: 6px; }
+#qty-input {
+  flex: 1; min-width: 0; padding: 6px 8px;
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 5px; color: var(--text);
+  font-size: 12px; outline: none;
+}
+#qty-input:disabled { opacity: 0.45; cursor: not-allowed; }
+.qty-all-toggle {
+  display: flex; align-items: center; gap: 4px;
+  padding: 6px 10px;
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: 5px; font-size: 12px; cursor: pointer;
+  user-select: none; white-space: nowrap;
+}
+.qty-all-toggle input { display: none; }
+.qty-all-toggle:has(input:checked),
+.qty-all-toggle.checked {
+  background: var(--accent); border-color: var(--accent); color: #fff;
+}
+.qty-all-toggle.hidden { display: none; }
+.qty-hint { font-size: 10px; color: var(--muted); margin-top: 4px; }
 .seg-opt input { display: none; }
 .seg-opt span {
   display: block; padding: 4px 10px;

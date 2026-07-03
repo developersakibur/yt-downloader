@@ -6,6 +6,9 @@ const API = "http://127.0.0.1:5000";
 const urlInput        = document.getElementById("url-input");
 const urlHint         = document.getElementById("url-hint");
 const qtyRow          = document.getElementById("qty-row");
+const qtyInput        = document.getElementById("qty-input");
+const qtyAllToggle    = document.getElementById("qty-all-toggle");
+const qtyHint         = document.getElementById("qty-hint");
 const scopeRow        = document.getElementById("scope-row");
 const qualitySelect   = document.getElementById("quality-select");
 const downloadBtn     = document.getElementById("download-btn");
@@ -96,6 +99,32 @@ document.querySelectorAll("input[name='format']").forEach(radio =>
 populateQualityOptions(); // initial fill on page load
 
 // ── URL form ──────────────────────────────────────────────────
+// Quantity row behavior differs by type:
+//   search            -> hard-capped at 100, "All" doesn't apply (endless feed)
+//   playlist / channel -> no upper cap, "All" downloads everything
+function configureQtyRow(type) {
+  qtyAllToggle.checked = false;
+  qtyAllToggle.parentElement.classList.remove("checked");
+  qtyInput.disabled = false;
+  if (type === "search") {
+    qtyInput.min = 1;
+    qtyInput.max = 100;
+    if (parseInt(qtyInput.value || "0") > 100) qtyInput.value = 100;
+    qtyAllToggle.parentElement.classList.add("hidden"); // no "All" concept for search
+    qtyHint.textContent = "Search results — max 100";
+  } else {
+    qtyInput.min = 1;
+    qtyInput.removeAttribute("max");
+    qtyAllToggle.parentElement.classList.remove("hidden");
+    qtyHint.textContent = "";
+  }
+}
+
+qtyAllToggle.addEventListener("change", () => {
+  qtyInput.disabled = qtyAllToggle.checked;
+  qtyAllToggle.parentElement.classList.toggle("checked", qtyAllToggle.checked);
+});
+
 function detectUrlType(url) {
   if (!url) return null;
   if (!/youtube\.com|youtu\.be/i.test(url)) return "invalid";
@@ -123,7 +152,10 @@ function updateFormUI() {
     return;
   }
   downloadBtn.disabled = false;
-  if (type === "search")     qtyRow.classList.remove("hidden");
+  if (type === "search" || type === "playlist" || type === "channel") {
+    qtyRow.classList.remove("hidden");
+    configureQtyRow(type);
+  }
   if (type === "video+list") scopeRow.classList.remove("hidden");
 }
 urlInput.addEventListener("input", updateFormUI);
@@ -139,7 +171,7 @@ downloadBtn.addEventListener("click", async () => {
     url,
     format:   document.querySelector("input[name='format']:checked")?.value || "MP4",
     quality:  qualitySelect.value,
-    quantity: parseInt(document.querySelector("input[name='quantity']:checked")?.value || "25"),
+    quantity: qtyAllToggle.checked ? "all" : Math.max(1, parseInt(qtyInput.value || "25", 10)),
     playlist: document.querySelector("input[name='playlist']:checked")?.value === "true",
   };
   try {

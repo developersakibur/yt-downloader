@@ -430,6 +430,37 @@ body {
   outline: none; transition: border-color 0.15s;
 }
 .quality-select:focus { border-color: var(--accent); }
+
+/* Quantity input + "All" toggle in the New Download form */
+.qty-control {
+  display: flex; align-items: center; gap: 8px;
+}
+#qty-input {
+  flex: 1; min-width: 0; padding: 8px 10px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text); font-size: 13px; font-family: var(--mono);
+  outline: none; transition: border-color 0.15s, opacity 0.15s;
+}
+#qty-input:focus { border-color: var(--accent); }
+#qty-input:disabled { opacity: 0.45; cursor: not-allowed; }
+.qty-all-toggle {
+  display: flex; align-items: center; gap: 5px;
+  padding: 8px 12px;
+  background: var(--surface2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12px; cursor: pointer; user-select: none;
+  white-space: nowrap; transition: all 0.15s;
+  flex-shrink: 0;
+}
+.qty-all-toggle input { display: none; }
+.qty-all-toggle:has(input:checked),
+.qty-all-toggle.checked {
+  background: var(--accent); border-color: var(--accent); color: #fff;
+}
+.qty-all-toggle.hidden { display: none; }
+.qty-hint { font-size: 11px; color: var(--muted); margin-top: 5px; }
 .cookie-status-block {
   font-size: 12px; font-family: var(--mono);
   color: var(--muted); padding: 6px 0;

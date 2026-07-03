@@ -87,13 +87,15 @@
         </div>
 
         <div class="field hidden" id="qty-row">
-          <label class="field-label">Result count</label>
-          <div class="seg">
-            <label class="seg-opt"><input type="radio" name="quantity" value="25" checked><span>25</span></label>
-            <label class="seg-opt"><input type="radio" name="quantity" value="50"><span>50</span></label>
-            <label class="seg-opt"><input type="radio" name="quantity" value="75"><span>75</span></label>
-            <label class="seg-opt"><input type="radio" name="quantity" value="100"><span>100</span></label>
+          <label class="field-label">How many videos</label>
+          <div class="qty-control">
+            <input type="number" id="qty-input" min="1" max="100" value="25" />
+            <label class="qty-all-toggle">
+              <input type="checkbox" id="qty-all-toggle">
+              <span id="qty-all-label">All</span>
+            </label>
           </div>
+          <div class="qty-hint" id="qty-hint"></div>
         </div>
 
         <div class="field hidden" id="scope-row">

@@ -147,20 +147,23 @@ def download_thumbnail(video_id: str, thumbnail_url: str) -> str | None:
 # METADATA EXTRACTION (yt-dlp probing only — download=False, always)
 # ---------------------------------------------------------------
 
-def _extract_flat(extract_url: str, ydl_opts: dict, quantity: int = 100):
+def _extract_flat(extract_url: str, ydl_opts: dict, quantity: int | None = 100):
     """List entries of a playlist/search/channel WITHOUT fetching full
     per-video metadata (fast). Used to enumerate what to scan.
     playlist_items limits yt-dlp to exactly the requested count so a
-    search for 25 never accidentally pulls 1000+ items."""
+    search for 25 never accidentally pulls 1000+ items.
+    quantity=None means no limit — omit playlist_items entirely so
+    yt-dlp walks the whole playlist/channel ('All' option)."""
     from yt_dlp import YoutubeDL
     opts = {
         "quiet": True,
         "logger": SilentLogger(),
         "extract_flat": "in_playlist",
         "skip_download": True,
-        "playlist_items": f"1-{quantity}",   # hard cap — fixes search overrun
         **ydl_opts,
     }
+    if quantity is not None:
+        opts["playlist_items"] = f"1-{quantity}"
     with YoutubeDL(opts) as ydl:
         return ydl.extract_info(extract_url, download=False)
 
@@ -179,9 +182,10 @@ def _extract_full(url: str, ydl_opts: dict):
         return ydl.extract_info(url, download=False)
 
 
-def probe(extract_url: str, flat: bool, quantity: int = 100):
+def probe(extract_url: str, flat: bool, quantity: int | None = 100):
     """No-cookies-first probing, retried once with cookies on a login/age/
-    bot-detection style failure (Cookie Priority rule)."""
+    bot-detection style failure (Cookie Priority rule).
+    quantity=None (flat mode only) means no limit — see _extract_flat."""
     if flat:
         fn = lambda ydl_opts: _extract_flat(extract_url, ydl_opts, quantity=quantity)
         info, used_cookies = ck.call_with_cookie_fallback(fn, ydl_opts={})
@@ -194,9 +198,11 @@ def probe(extract_url: str, flat: bool, quantity: int = 100):
 # MAIN ENTRY POINT
 # ---------------------------------------------------------------
 
-def scan(url: str, quantity: int = 25, force_playlist: bool = False,
+def scan(url: str, quantity: int | str = 25, force_playlist: bool = False,
          format: str = "MP4", quality: str = "best") -> dict:
     """Validate -> extract metadata -> cache thumbnails -> store in DB.
+    quantity: an int, or the string 'all' (playlist/channel only — search
+    is always capped at 100 regardless of what's passed here).
     Returns a summary dict: {group_id, job_ids, type, used_cookies}.
     Raises ValueError for invalid/unrecognized URLs."""
 
@@ -207,10 +213,34 @@ def scan(url: str, quantity: int = 25, force_playlist: bool = False,
     if url_type == "unknown":
         raise ValueError(f"Could not recognize URL type: {url}")
 
-    extract_url = build_extract_url(url, url_type, quantity)
     is_group_type = url_type in ("playlist", "search", "channel-longs", "channel-shorts", "channel-full")
 
-    info, used_cookies = probe(extract_url, flat=is_group_type, quantity=int(quantity))
+    # Quantity normalization — server-side, independent of what the client
+    # sent, so a stale/tampered request can never bypass these rules:
+    #   - search: always capped at 100 ('All' doesn't apply — YouTube search
+    #     is an endless feed, there's no natural 'all')
+    #   - playlist / channel: quantity='all' (any case) means no limit
+    #   - single / short: quantity is irrelevant, ignored
+    quantity_for_extract = None  # None = no limit (only meaningful for flat/group extraction)
+    if url_type == "search":
+        try:
+            q = int(quantity)
+        except (TypeError, ValueError):
+            q = 25
+        quantity_for_extract = max(1, min(q, 100))
+    elif is_group_type:
+        if isinstance(quantity, str) and quantity.strip().lower() == "all":
+            quantity_for_extract = None
+        else:
+            try:
+                q = int(quantity)
+            except (TypeError, ValueError):
+                q = 25
+            quantity_for_extract = max(1, q)
+
+    extract_url = build_extract_url(url, url_type, quantity_for_extract or 25)
+
+    info, used_cookies = probe(extract_url, flat=is_group_type, quantity=quantity_for_extract)
 
     job_ids = []
     group_id = None

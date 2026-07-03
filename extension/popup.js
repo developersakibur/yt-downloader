@@ -22,6 +22,9 @@ const dlLabel         = document.getElementById("dl-label");
 const dlSpinner       = document.getElementById("dl-spinner");
 const dlStatus        = document.getElementById("dl-status");
 const qtyRow          = document.getElementById("qty-row");
+const qtyInput        = document.getElementById("qty-input");
+const qtyAllToggle    = document.getElementById("qty-all-toggle");
+const qtyHint         = document.getElementById("qty-hint");
 const scopeRow        = document.getElementById("scope-row");
 const qualitySelect   = document.getElementById("quality-select");
 
@@ -74,6 +77,29 @@ async function checkServer() {
   }
 }
 
+// ── Quantity row behavior — mirrors web/app.js ─────────────────
+function configureQtyRow(type) {
+  qtyAllToggle.checked = false;
+  qtyAllToggle.parentElement.classList.remove("checked");
+  qtyInput.disabled = false;
+  if (type === "search") {
+    qtyInput.min = 1;
+    qtyInput.max = 100;
+    if (parseInt(qtyInput.value || "0") > 100) qtyInput.value = 100;
+    qtyAllToggle.parentElement.classList.add("hidden");
+    qtyHint.textContent = "Search results — max 100";
+  } else {
+    qtyInput.min = 1;
+    qtyInput.removeAttribute("max");
+    qtyAllToggle.parentElement.classList.remove("hidden");
+    qtyHint.textContent = "";
+  }
+}
+qtyAllToggle.addEventListener("change", () => {
+  qtyInput.disabled = qtyAllToggle.checked;
+  qtyAllToggle.parentElement.classList.toggle("checked", qtyAllToggle.checked);
+});
+
 // ── URL detection (mirrors scanner.detect_type) ───────────────
 function detectUrlType(url) {
   if (!/youtube\.com/i.test(url)) return null;
@@ -100,7 +126,8 @@ async function loadCurrentTab() {
     showView("unsupported"); return;
   }
 
-  if (type === "search") {
+  if (type === "search" || type === "playlist" || type === "channel") {
+    configureQtyRow(type);
     showView("form", [qtyRow]);
   } else if (type === "video+list") {
     showView("form", [scopeRow]);
@@ -245,7 +272,7 @@ downloadBtn.addEventListener("click", async () => {
     url,
     format: document.querySelector("input[name='format']:checked")?.value || "MP4",
     quality: qualitySelect.value,
-    quantity: parseInt(document.querySelector("input[name='quantity']:checked")?.value || "25"),
+    quantity: qtyAllToggle.checked ? "all" : Math.max(1, parseInt(qtyInput.value || "25", 10)),
     playlist: document.querySelector("input[name='playlist']:checked")?.value === "true",
   };
 
