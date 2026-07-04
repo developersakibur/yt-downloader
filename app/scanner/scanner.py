@@ -194,6 +194,125 @@ def probe(extract_url: str, flat: bool, quantity: int | None = 100):
     return info, used_cookies
 
 
+def scan_preview(url: str, quantity: int | str = 25, force_playlist: bool = False) -> dict:
+    """Like scan(), but for group-type URLs (playlist/search/channel) only
+    metadata + thumbnails are fetched — nothing is written to video_jobs
+    or groups. Used to populate the batch-selection popup so the person
+    can choose which videos to actually queue.
+
+    Single video / short should never call this — the caller (routes.py)
+    keeps using scan() directly for those, unchanged, no popup involved.
+    Raises ValueError for invalid/unrecognized/non-group URLs."""
+
+    if not is_valid_youtube_url(url):
+        raise ValueError("Not a valid YouTube URL")
+
+    url_type = detect_type(url, force_playlist=force_playlist)
+    if url_type == "unknown":
+        raise ValueError(f"Could not recognize URL type: {url}")
+    if url_type not in ("playlist", "search", "channel-longs", "channel-shorts", "channel-full"):
+        raise ValueError("scan_preview is only for playlist/search/channel URLs")
+
+    quantity_for_extract = None
+    if url_type == "search":
+        try:
+            q = int(quantity)
+        except (TypeError, ValueError):
+            q = 25
+        quantity_for_extract = max(1, min(q, 100))
+    else:
+        if isinstance(quantity, str) and quantity.strip().lower() == "all":
+            quantity_for_extract = None
+        else:
+            try:
+                q = int(quantity)
+            except (TypeError, ValueError):
+                q = 25
+            quantity_for_extract = max(1, q)
+
+    extract_url = build_extract_url(url, url_type, quantity_for_extract or 25)
+    info, used_cookies = probe(extract_url, flat=True, quantity=quantity_for_extract)
+
+    entries = [e for e in (info.get("entries") or []) if e]
+    group_name = info.get("title") or info.get("uploader") or info.get("channel") or _group_name_for(url_type)
+
+    preview_entries = []
+    for idx, entry in enumerate(entries, start=1):
+        video_id = entry.get("id")
+        video_url = entry.get("url") or (f"https://youtu.be/{video_id}" if video_id else None)
+        if not video_url:
+            continue
+        thumb_url = entry.get("thumbnail") or _best_thumbnail(entry.get("thumbnails"))
+        thumb_path = download_thumbnail(video_id, thumb_url) if video_id and thumb_url else None
+
+        preview_entries.append({
+            "video_id": video_id,
+            "url": video_url,
+            "title": entry.get("title"),
+            "thumbnail_path": thumb_path,
+            "duration": entry.get("duration"),
+            "uploader": entry.get("uploader") or entry.get("channel"),
+            "playlist_index": idx,
+        })
+
+    return {
+        "type": url_type,
+        "group_name": group_name,
+        "source_url": url,
+        "entries": preview_entries,
+        "used_cookies": used_cookies,
+    }
+
+
+def confirm_batch(source_url: str, url_type: str, group_name: str,
+                   entries: list, format: str = "MP4", quality: str = "best") -> dict:
+    """Creates the Group + one Job per selected entry. Called only after
+    the person confirms their selection in the popup — this is the sole
+    place group-type jobs get written to the DB (scan_preview never
+    writes anything).
+
+    `entries` — list of dicts as returned by scan_preview's "entries",
+    each optionally carrying a "prefix" (int) set by the frontend when
+    the "add number prefix" toggle is on; omitted/None means no prefix
+    for that job."""
+
+    if url_type not in ("playlist", "search", "channel-longs", "channel-shorts", "channel-full"):
+        raise ValueError("confirm_batch is only for playlist/search/channel URLs")
+    if not entries:
+        raise ValueError("No videos selected")
+
+    format = (format or "MP4").upper()
+
+    group_id = db.create_group(
+        type_=url_type,
+        name=group_name or _group_name_for(url_type),
+        source_url=source_url,
+        total_videos=len(entries),
+    )
+
+    job_ids = []
+    for entry in entries:
+        video_url = entry.get("url")
+        if not video_url:
+            continue
+        job_id = db.create_job(
+            url=video_url,
+            group_id=group_id,
+            video_id=entry.get("video_id"),
+            original_title=entry.get("title"),
+            thumbnail_path=entry.get("thumbnail_path"),
+            duration=entry.get("duration"),
+            uploader=entry.get("uploader"),
+            playlist_index=entry.get("playlist_index"),
+            selection_prefix=entry.get("prefix"),
+            format=format,
+            quality=quality,
+        )
+        job_ids.append(job_id)
+
+    return {"group_id": group_id, "job_ids": job_ids, "video_count": len(job_ids)}
+
+
 # ---------------------------------------------------------------
 # MAIN ENTRY POINT
 # ---------------------------------------------------------------

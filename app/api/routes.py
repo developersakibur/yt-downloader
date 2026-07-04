@@ -13,6 +13,7 @@ database immediately, same as everywhere else).
 
 import os
 import sys
+import json
 import uuid
 import threading
 
@@ -91,6 +92,67 @@ def post_scan():
     return jsonify({"ok": True, "scan_id": scan_id})
 
 
+def _run_preview(scan_id, url, quantity, force_playlist, format, quality, source):
+    try:
+        result = scanner.scan_preview(url, quantity=quantity, force_playlist=force_playlist)
+        preview_id = str(uuid.uuid4())
+        db.create_pending_preview(
+            id_=preview_id,
+            type_=result["type"],
+            group_name=result["group_name"],
+            source_url=result["source_url"],
+            format=format,
+            quality=quality,
+            video_count=len(result["entries"]),
+            entries_json=json.dumps(result["entries"]),
+            source=source,
+        )
+        with _scan_lock:
+            _scan_registry[scan_id] = {
+                "status": "done",
+                "result": {"preview_id": preview_id, "video_count": len(result["entries"])},
+                "error": None,
+            }
+    except Exception as e:
+        with _scan_lock:
+            _scan_registry[scan_id] = {"status": "error", "result": None, "error": str(e)}
+
+
+@api.route("/scan/preview", methods=["POST"])
+def post_scan_preview():
+    """Group-type URLs (playlist/search/channel) only — from either the
+    web UI or the browser extension. Never auto-queues: scans, then
+    stores the result as a pending preview for the Approve tab.
+    Single video/short should keep using POST /api/scan as before."""
+    data = request.get_json(force=True) or {}
+    url = (data.get("url") or "").strip()
+    quantity = data.get("quantity", 25)
+    force_playlist = bool(data.get("playlist", False))
+    format = (data.get("format") or "MP4").upper()
+    if format not in ("MP4", "MP3", "3GP"):
+        format = "MP4"
+    quality = data.get("quality") or ("best" if format == "MP4" else _VALID_QUALITIES[format][0])
+    if quality not in _VALID_QUALITIES[format]:
+        quality = _VALID_QUALITIES[format][0]
+    source = data.get("source") if data.get("source") in ("web", "extension") else "web"
+
+    if not url:
+        return jsonify({"ok": False, "error": "url required"}), 400
+    if not scanner.is_valid_youtube_url(url):
+        return jsonify({"ok": False, "error": "not a valid YouTube URL"}), 400
+
+    scan_id = str(uuid.uuid4())
+    with _scan_lock:
+        _scan_registry[scan_id] = {"status": "pending", "result": None, "error": None}
+
+    threading.Thread(
+        target=_run_preview,
+        args=(scan_id, url, quantity, force_playlist, format, quality, source),
+        daemon=True,
+    ).start()
+    return jsonify({"ok": True, "scan_id": scan_id})
+
+
 @api.route("/scan/status/<scan_id>")
 def get_scan_status(scan_id):
     with _scan_lock:
@@ -98,6 +160,92 @@ def get_scan_status(scan_id):
     if entry is None:
         return jsonify({"ok": False, "error": "unknown scan_id"}), 404
     return jsonify({"ok": True, **entry})
+
+
+# ---------------------------------------------------------------
+# GHOST HISTORY CLEANUP
+# Completed jobs whose file was deleted outside the app (e.g. the whole
+# Downloads folder wiped) still linger as DB rows/UI entries otherwise.
+# Runs on-fetch (queue + history) rather than only at startup, so it
+# also catches files removed while the app is running.
+# ---------------------------------------------------------------
+
+def _prune_ghost_jobs():
+    for job in db.list_completed_jobs_for_prune():
+        file_path = job.get("file_path")
+        if file_path and os.path.isfile(file_path):
+            continue  # file still exists — not a ghost
+
+        thumb = job.get("thumbnail_path")
+        if thumb and os.path.isfile(thumb):
+            try:
+                os.remove(thumb)
+            except OSError:
+                pass  # non-fatal — DB row cleanup still proceeds
+
+        db.delete_job(job["id"])
+
+
+# ---------------------------------------------------------------
+# APPROVE TAB — pending previews from web UI or extension scans.
+# Nothing here ever auto-downloads; a preview sits until the person
+# confirms (selected entries -> Group + Jobs, row deleted) or deletes
+# it manually. No auto-expiry.
+# ---------------------------------------------------------------
+
+@api.route("/previews")
+def get_previews():
+    return jsonify({"ok": True, "previews": db.list_pending_previews()})
+
+
+@api.route("/previews/<preview_id>")
+def get_preview(preview_id):
+    row = db.get_pending_preview(preview_id)
+    if row is None:
+        return jsonify({"ok": False, "error": "preview not found"}), 404
+    row["entries"] = json.loads(row.pop("entries_json"))
+    return jsonify({"ok": True, "preview": row})
+
+
+@api.route("/previews/<preview_id>", methods=["DELETE"])
+def delete_preview(preview_id):
+    row = db.get_pending_preview(preview_id)
+    if row is None:
+        return jsonify({"ok": False, "error": "preview not found"}), 404
+    db.delete_pending_preview(preview_id)
+    return jsonify({"ok": True})
+
+
+@api.route("/previews/<preview_id>/confirm", methods=["POST"])
+def confirm_preview(preview_id):
+    """Creates the Group + Jobs for a selection made in the Approve tab.
+    type/group_name/source_url are trusted from the stored preview row
+    (not the client) — only the selected entries (with prefix) and an
+    optional format/quality override come from the request body."""
+    row = db.get_pending_preview(preview_id)
+    if row is None:
+        return jsonify({"ok": False, "error": "preview not found"}), 404
+
+    data = request.get_json(force=True) or {}
+    entries = data.get("entries") or []
+
+    format = (data.get("format") or row["format"]).upper()
+    if format not in ("MP4", "MP3", "3GP"):
+        format = row["format"]
+    quality = data.get("quality") or row["quality"]
+    if quality not in _VALID_QUALITIES[format]:
+        quality = _VALID_QUALITIES[format][0]
+
+    try:
+        result = scanner.confirm_batch(
+            source_url=row["source_url"], url_type=row["type"], group_name=row["group_name"],
+            entries=entries, format=format, quality=quality,
+        )
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
+
+    db.delete_pending_preview(preview_id)
+    return jsonify({"ok": True, **result})
 
 
 # ---------------------------------------------------------------
@@ -119,6 +267,7 @@ _QUEUE_STATUSES = ["queued", "downloading", "converting", "paused", "failed"]
 
 @api.route("/queue")
 def get_queue():
+    _prune_ghost_jobs()
     status = request.args.get("status")
     group_id = request.args.get("group_id", type=int)
     if status:
@@ -265,6 +414,7 @@ def delete_cookies():
 
 @api.route("/history")
 def get_history():
+    _prune_ghost_jobs()
     limit = request.args.get("limit", default=100, type=int)
     return jsonify({"ok": True, "history": db.get_history(limit=limit)})
 

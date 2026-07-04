@@ -266,16 +266,35 @@ downloadBtn.addEventListener("click", async () => {
   downloadBtn.disabled = true;
   dlLabel.classList.add("hidden");
   dlSpinner.classList.remove("hidden");
-  setStatus(dlStatus, "Scanning URL…");
 
-  const body = {
-    url,
-    format: document.querySelector("input[name='format']:checked")?.value || "MP4",
-    quality: qualitySelect.value,
-    quantity: qtyAllToggle.checked ? "all" : Math.max(1, parseInt(qtyInput.value || "25", 10)),
-    playlist: document.querySelector("input[name='playlist']:checked")?.value === "true",
-  };
+  const type = detectUrlType(url);
+  const isGroup = type === "search" || type === "playlist" || type === "channel" ||
+    (type === "video+list" && document.querySelector("input[name='playlist']:checked")?.value === "true");
 
+  const format  = document.querySelector("input[name='format']:checked")?.value || "MP4";
+  const quality = qualitySelect.value;
+  const quantity = qtyAllToggle.checked ? "all" : Math.max(1, parseInt(qtyInput.value || "25", 10));
+  const playlist = document.querySelector("input[name='playlist']:checked")?.value === "true";
+
+  if (isGroup) {
+    setStatus(dlStatus, "Scanning URL…");
+    try {
+      const res = await fetch(`${API}/api/scan/preview`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, format, quality, quantity, playlist, source: "extension" }),
+      });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "scan rejected");
+      pollPreviewScan(data.scan_id);
+    } catch (e) {
+      setStatus(dlStatus, `❌ ${e.message}`, "err");
+      resetDownloadBtn();
+    }
+    return;
+  }
+
+  const body = { url, format, quality, quantity, playlist };
   try {
     const res = await fetch(`${API}/api/scan`, {
       method: "POST",
@@ -290,6 +309,36 @@ downloadBtn.addEventListener("click", async () => {
     resetDownloadBtn();
   }
 });
+
+function pollPreviewScan(scanId, attempt = 0) {
+  if (attempt > 60) {
+    setStatus(dlStatus, "❌ Scan timed out.", "err");
+    resetDownloadBtn();
+    return;
+  }
+  clearTimeout(pollTimer);
+  pollTimer = setTimeout(async () => {
+    try {
+      const r = await fetch(`${API}/api/scan/status/${scanId}`);
+      const d = await r.json();
+      if (d.status === "pending") {
+        setStatus(dlStatus, `Scanning… (${attempt + 1})`);
+        pollPreviewScan(scanId, attempt + 1);
+        return;
+      }
+      if (d.status === "done") {
+        const n = d.result.video_count;
+        setStatus(dlStatus,
+          `✓ Found ${n} video${n !== 1 ? "s" : ""} — open Dashboard → Approve tab to review and start.`, "ok");
+      } else {
+        setStatus(dlStatus, `❌ ${d.error || "Scan failed."}`, "err");
+      }
+    } catch {
+      setStatus(dlStatus, "❌ Lost connection to server.", "err");
+    }
+    resetDownloadBtn();
+  }, 800);
+}
 
 function pollScan(scanId, attempt = 0) {
   if (attempt > 60) {           // 60 × 800ms = 48s timeout

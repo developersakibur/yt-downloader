@@ -86,6 +86,7 @@ def _migrate(conn):
     applied migration (column already exists) is just skipped."""
     migrations = [
         "ALTER TABLE video_jobs ADD COLUMN quality TEXT NOT NULL DEFAULT 'best'",
+        "ALTER TABLE video_jobs ADD COLUMN selection_prefix INTEGER",
     ]
     for stmt in migrations:
         try:
@@ -154,17 +155,18 @@ JOB_FIELDS = (
 
 def create_job(url, format="MP4", quality="best", group_id=None, video_id=None,
                 original_title=None, thumbnail_path=None, duration=None,
-                uploader=None, playlist_index=None):
+                uploader=None, playlist_index=None, selection_prefix=None):
     """Scanner calls this for every video it discovers.
     Job always starts as 'queued'."""
     with cursor(write=True) as cur:
         cur.execute(
             """INSERT INTO video_jobs
                (group_id, video_id, url, original_title, thumbnail_path,
-                duration, uploader, playlist_index, format, quality, status)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued')""",
+                duration, uploader, playlist_index, selection_prefix,
+                format, quality, status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued')""",
             (group_id, video_id, url, original_title, thumbnail_path,
-             duration, uploader, playlist_index, format, quality),
+             duration, uploader, playlist_index, selection_prefix, format, quality),
         )
         return cur.lastrowid
 
@@ -210,6 +212,16 @@ def update_job(job_id, **fields):
 def delete_job(job_id):
     with cursor(write=True) as cur:
         cur.execute("DELETE FROM video_jobs WHERE id = ?", (job_id,))
+
+
+def list_completed_jobs_for_prune():
+    """Completed jobs only — queued/downloading/etc. never have a final
+    file yet, so they're excluded from the ghost-file check by design."""
+    with cursor() as cur:
+        cur.execute(
+            "SELECT id, file_path, thumbnail_path FROM video_jobs WHERE status = 'completed'"
+        )
+        return _rows_to_dicts(cur.fetchall())
 
 
 def claim_next_queued_job(worker_name):
@@ -371,3 +383,46 @@ def list_local_conversion_jobs(batch_id):
             (batch_id,),
         )
         return _rows_to_dicts(cur.fetchall())
+
+
+# =================================================================
+# PENDING PREVIEWS (Approve tab)
+# =================================================================
+
+def create_pending_preview(id_, type_, group_name, source_url, format, quality,
+                            video_count, entries_json, source="web"):
+    with cursor(write=True) as cur:
+        cur.execute(
+            """INSERT INTO pending_previews
+               (id, type, group_name, source_url, format, quality,
+                video_count, entries_json, source)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (id_, type_, group_name, source_url, format, quality,
+             video_count, entries_json, source),
+        )
+        return id_
+
+
+def list_pending_previews():
+    """Summary rows only (no entries_json) — for the collapsed Approve
+    tab accordion list."""
+    with cursor() as cur:
+        cur.execute(
+            "SELECT id, type, group_name, source_url, format, quality, "
+            "video_count, source, created_at FROM pending_previews "
+            "ORDER BY created_at DESC"
+        )
+        return _rows_to_dicts(cur.fetchall())
+
+
+def get_pending_preview(id_):
+    """Full row, including entries_json — used when an accordion item
+    is expanded, or on confirm."""
+    with cursor() as cur:
+        cur.execute("SELECT * FROM pending_previews WHERE id = ?", (id_,))
+        return _row_to_dict(cur.fetchone())
+
+
+def delete_pending_preview(id_):
+    with cursor(write=True) as cur:
+        cur.execute("DELETE FROM pending_previews WHERE id = ?", (id_,))

@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS video_jobs (
     duration            INTEGER,               -- seconds
     uploader             TEXT,
     playlist_index       INTEGER,               -- position inside playlist/search/channel, else NULL
+    selection_prefix     INTEGER,               -- order the video was selected in the batch popup
+                                                  -- (only set when the "add number prefix" toggle is on)
 
     -- Job control
     format               TEXT NOT NULL DEFAULT 'MP4' CHECK (format IN ('MP3', 'MP4', '3GP')),
@@ -138,3 +140,25 @@ CREATE TABLE IF NOT EXISTS local_conversion_jobs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_local_conv_batch ON local_conversion_jobs(batch_id);
+
+-- ---------------------------------------------------------------
+-- PENDING PREVIEWS (Approve tab)
+-- A scan of a playlist/search/channel — from the web UI or the browser
+-- extension — never auto-queues. It lands here instead, and stays here
+-- until the person reviews it in the Approve tab and either confirms
+-- (jobs get created, row deleted) or deletes it manually. No auto-expiry.
+-- entries_json holds the full scan_preview() entries list (video_id,
+-- url, title, thumbnail_path, duration, uploader, playlist_index).
+-- ---------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS pending_previews (
+    id              TEXT PRIMARY KEY,       -- uuid
+    type            TEXT NOT NULL,          -- playlist / search / channel-longs / channel-shorts / channel-full
+    group_name      TEXT NOT NULL,
+    source_url      TEXT NOT NULL,
+    format          TEXT NOT NULL DEFAULT 'MP4',
+    quality         TEXT NOT NULL DEFAULT 'best',
+    video_count     INTEGER NOT NULL DEFAULT 0,
+    entries_json    TEXT NOT NULL,          -- JSON list, see scanner.scan_preview()
+    source          TEXT NOT NULL DEFAULT 'web',  -- 'web' or 'extension' — cosmetic, shown in Approve tab
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);

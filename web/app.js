@@ -59,6 +59,7 @@ document.querySelectorAll(".tab").forEach(tab => {
     document.getElementById(`tab-${tab.dataset.tab}`).classList.add("active");
     if (tab.dataset.tab === "history")  fetchHistory();
     if (tab.dataset.tab === "settings") fetchSettings();
+    if (tab.dataset.tab === "approve")  fetchPreviews();
   });
 });
 
@@ -161,16 +162,55 @@ function updateFormUI() {
 urlInput.addEventListener("input", updateFormUI);
 
 // ── Scan submission ───────────────────────────────────────────
+// Group-type URLs (playlist / search / channel / "whole playlist" scope)
+// go through the preview -> popup -> confirm flow. Single video / short
+// keep using the old direct scan -> auto-queue flow, unchanged.
+function isGroupSubmission() {
+  const type = detectUrlType(urlInput.value.trim());
+  if (type === "search" || type === "playlist" || type === "channel") return true;
+  if (type === "video+list") {
+    return document.querySelector("input[name='playlist']:checked")?.value === "true";
+  }
+  return false;
+}
+
 downloadBtn.addEventListener("click", async () => {
   const url = urlInput.value.trim();
   if (!url) return;
   downloadBtn.disabled = true;
   downloadBtnLbl.classList.add("hidden");
   scanSpinner.classList.remove("hidden");
+
+  const format  = document.querySelector("input[name='format']:checked")?.value || "MP4";
+  const quality = qualitySelect.value;
+
+  if (isGroupSubmission()) {
+    const body = {
+      url,
+      format, quality,
+      quantity: qtyAllToggle.checked ? "all" : Math.max(1, parseInt(qtyInput.value || "25", 10)),
+      playlist: document.querySelector("input[name='playlist']:checked")?.value === "true",
+      source: "web",
+    };
+    try {
+      const res  = await fetch(`${API}/api/scan/preview`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body) });
+      const data = await res.json();
+      if (!data.ok) throw new Error(data.error || "scan rejected");
+      activePreviewScanId = data.scan_id;
+      urlHint.textContent = "Scanning…";
+      urlHint.className   = "url-hint";
+      pollPreview();
+    } catch (e) {
+      urlHint.textContent = `❌ ${e.message}`;
+      urlHint.classList.add("error");
+      resetDownloadBtn();
+    }
+    return;
+  }
+
   const body = {
     url,
-    format:   document.querySelector("input[name='format']:checked")?.value || "MP4",
-    quality:  qualitySelect.value,
+    format, quality,
     quantity: qtyAllToggle.checked ? "all" : Math.max(1, parseInt(qtyInput.value || "25", 10)),
     playlist: document.querySelector("input[name='playlist']:checked")?.value === "true",
   };
@@ -221,6 +261,280 @@ function pollScan() {
     activeScanId = null;
     resetDownloadBtn();
   }, 800);
+}
+
+// ── Preview scanning (playlist / search / channel -> Approve tab) ──
+let activePreviewScanId = null;
+let previewPollTimer    = null;
+
+function pollPreview() {
+  clearTimeout(previewPollTimer);
+  if (!activePreviewScanId) return;
+  previewPollTimer = setTimeout(async () => {
+    try {
+      const res  = await fetch(`${API}/api/scan/status/${activePreviewScanId}`);
+      const data = await res.json();
+      if (data.status === "pending") { pollPreview(); return; }
+      if (data.status === "done") {
+        const n = data.result.video_count;
+        urlHint.textContent = `✓ Found ${n} video${n !== 1 ? "s" : ""} — review and confirm in the Approve tab.`;
+        urlHint.className   = "url-hint";
+        urlInput.value = "";
+        updateFormUI();
+        refreshApproveBadge();
+        if (document.querySelector('.tab[data-tab="approve"]').classList.contains("active")) fetchPreviews();
+      } else {
+        urlHint.textContent = `❌ ${data.error || "Scan failed."}`;
+        urlHint.classList.add("error");
+      }
+    } catch {
+      urlHint.textContent = "❌ Could not reach server.";
+      urlHint.classList.add("error");
+    }
+    activePreviewScanId = null;
+    resetDownloadBtn();
+  }, 800);
+}
+
+function fmtDuration(sec) {
+  if (!sec && sec !== 0) return "";
+  sec = Math.round(sec);
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  return h > 0 ? `${h}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}` : `${m}:${String(s).padStart(2,"0")}`;
+}
+
+// ── Approve tab (accordion of pending previews) ─────────────────
+const approveList  = document.getElementById("approve-list");
+const approveCount = document.getElementById("approve-count");
+const approveBadge = document.getElementById("approve-badge");
+
+// expandedPreview[id] holds the working selection state once a card is
+// opened: { entries, selectionOrder, usePrefix }. Not fetched again
+// unless the accordion is re-opened after being closed.
+let previewSummaries  = [];
+let expandedPreviewId = null;
+let expandedState     = null;
+
+async function refreshApproveBadge() {
+  try {
+    const res  = await fetch(`${API}/api/previews`);
+    const data = await res.json();
+    if (!data.ok) return;
+    const n = data.previews.length;
+    if (approveBadge) approveBadge.textContent = n > 0 ? String(n) : "";
+    if (approveBadge) approveBadge.classList.toggle("hidden", n === 0);
+  } catch {}
+}
+
+async function fetchPreviews() {
+  try {
+    const res  = await fetch(`${API}/api/previews`);
+    const data = await res.json();
+    if (!data.ok) return;
+    previewSummaries = data.previews;
+    renderApproveList();
+  } catch {}
+}
+
+function renderApproveList() {
+  approveCount.textContent = previewSummaries.length
+    ? `${previewSummaries.length} pending`
+    : "Nothing pending";
+
+  if (!previewSummaries.length) {
+    approveList.innerHTML = `<div class="empty-state"><div class="empty-icon">✅</div><p>Nothing to approve.<br>Playlist / search / channel scans land here — from this app or the browser extension.</p></div>`;
+    return;
+  }
+
+  approveList.innerHTML = previewSummaries.map(p => {
+    const isOpen = p.id === expandedPreviewId;
+    return `
+      <div class="approve-card ${isOpen ? "open" : ""}" data-preview-id="${p.id}">
+        <div class="approve-card-header">
+          <div class="approve-card-title">
+            <span class="approve-chevron">${isOpen ? "▾" : "▸"}</span>
+            <span>${esc(p.group_name)}</span>
+            <span class="badge badge-neutral">${p.type}</span>
+            ${p.source === "extension" ? `<span class="badge badge-neutral">extension</span>` : ""}
+          </div>
+          <div class="approve-card-meta">
+            <span>${p.video_count} videos · ${esc(p.format)}/${esc(p.quality)}</span>
+            <button class="btn-tiny approve-delete-btn" data-preview-id="${p.id}" title="Delete this pending scan">Delete</button>
+          </div>
+        </div>
+        <div class="approve-card-body ${isOpen ? "" : "hidden"}" id="approve-body-${p.id}"></div>
+      </div>`;
+  }).join("");
+
+  approveList.querySelectorAll(".approve-card-header").forEach(header => {
+    header.addEventListener("click", (ev) => {
+      if (ev.target.closest(".approve-delete-btn")) return; // don't toggle when deleting
+      const id = header.closest(".approve-card").dataset.previewId;
+      toggleApproveCard(id);
+    });
+  });
+  approveList.querySelectorAll(".approve-delete-btn").forEach(btn => {
+    btn.addEventListener("click", async (ev) => {
+      ev.stopPropagation();
+      const id = btn.dataset.previewId;
+      btn.disabled = true;
+      try {
+        await fetch(`${API}/api/previews/${id}`, { method: "DELETE" });
+        if (expandedPreviewId === id) { expandedPreviewId = null; expandedState = null; }
+        await fetchPreviews();
+        refreshApproveBadge();
+      } catch {
+        btn.disabled = false;
+      }
+    });
+  });
+}
+
+async function toggleApproveCard(id) {
+  if (expandedPreviewId === id) {
+    expandedPreviewId = null;
+    expandedState = null;
+    renderApproveList();
+    return;
+  }
+  expandedPreviewId = id;
+  expandedState = null;
+  renderApproveList(); // shows the chevron flipped + empty body while loading
+
+  try {
+    const res  = await fetch(`${API}/api/previews/${id}`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Could not load preview");
+    expandedState = {
+      entries: data.preview.entries,
+      selectionOrder: data.preview.entries.map(e => e.video_id), // default: all selected, natural order
+      usePrefix: false,
+    };
+    renderExpandedBody(id);
+  } catch (e) {
+    const body = document.getElementById(`approve-body-${id}`);
+    if (body) body.innerHTML = `<div class="approve-body-error">❌ ${esc(e.message)}</div>`;
+  }
+}
+
+function renderExpandedBody(id) {
+  const body = document.getElementById(`approve-body-${id}`);
+  if (!body || !expandedState) return;
+  const { entries, selectionOrder, usePrefix } = expandedState;
+  const orderIndex = new Map(selectionOrder.map((vid, i) => [vid, i + 1]));
+
+  const itemsHtml = entries.map(e => {
+    const selected = orderIndex.has(e.video_id);
+    const prefix   = selected ? orderIndex.get(e.video_id) : null;
+    const thumb = e.video_id
+      ? `<img class="batch-item-thumb" src="${API}/thumbnails/${e.video_id}.jpg" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'batch-item-thumb-placeholder',textContent:'▶'}))">`
+      : `<div class="batch-item-thumb-placeholder">▶</div>`;
+    return `
+      <label class="batch-item ${selected ? "" : "deselected"}" data-video-id="${esc(e.video_id || "")}">
+        <input type="checkbox" class="batch-item-check" ${selected ? "checked" : ""}>
+        <span class="batch-item-prefix">${prefix !== null ? prefix : ""}</span>
+        ${thumb}
+        <div class="batch-item-info">
+          <div class="batch-item-title" title="${esc(e.title || "")}">${esc(e.title || "(untitled)")}</div>
+          <div class="batch-item-meta">${esc(e.uploader || "")}${e.duration ? " · " + fmtDuration(e.duration) : ""}</div>
+        </div>
+      </label>`;
+  }).join("");
+
+  body.innerHTML = `
+    <div class="batch-modal-toolbar">
+      <button class="btn-text approve-select-all">Select all</button>
+      <button class="btn-text approve-deselect-all">Deselect all</button>
+      <span class="batch-selected-count">${selectionOrder.length} selected</span>
+      <label class="checkbox-row batch-prefix-toggle">
+        <input type="checkbox" class="approve-prefix-toggle" ${usePrefix ? "checked" : ""}>
+        <span>Add number prefix to filenames</span>
+      </label>
+    </div>
+    <div class="batch-modal-list approve-item-list">${itemsHtml}</div>
+    <div class="modal-footer">
+      <span class="modal-footer-hint approve-confirm-hint"></span>
+      <div class="modal-footer-actions">
+        <button class="btn-primary approve-confirm-btn" ${selectionOrder.length ? "" : "disabled"}>
+          <span class="approve-confirm-label">Download selected</span>
+          <span class="scan-spinner hidden approve-confirm-spinner">starting…</span>
+        </button>
+      </div>
+    </div>`;
+
+  body.querySelectorAll(".batch-item-check").forEach(cb => {
+    cb.addEventListener("change", (ev) => {
+      const vid = ev.target.closest(".batch-item").dataset.videoId;
+      if (ev.target.checked) {
+        if (!expandedState.selectionOrder.includes(vid)) expandedState.selectionOrder.push(vid);
+      } else {
+        expandedState.selectionOrder = expandedState.selectionOrder.filter(v => v !== vid);
+      }
+      renderExpandedBody(id); // renumber, no gaps
+    });
+  });
+  body.querySelector(".approve-select-all").addEventListener("click", () => {
+    expandedState.selectionOrder = expandedState.entries.map(e => e.video_id);
+    renderExpandedBody(id);
+  });
+  body.querySelector(".approve-deselect-all").addEventListener("click", () => {
+    expandedState.selectionOrder = [];
+    renderExpandedBody(id);
+  });
+  body.querySelector(".approve-prefix-toggle").addEventListener("change", (ev) => {
+    expandedState.usePrefix = ev.target.checked;
+  });
+  body.querySelector(".approve-confirm-btn").addEventListener("click", () => confirmApprovePreview(id));
+}
+
+async function confirmApprovePreview(id) {
+  if (!expandedState || !expandedState.selectionOrder.length) return;
+  const body = document.getElementById(`approve-body-${id}`);
+  const btn      = body.querySelector(".approve-confirm-btn");
+  const label    = body.querySelector(".approve-confirm-label");
+  const spinner  = body.querySelector(".approve-confirm-spinner");
+  const hint     = body.querySelector(".approve-confirm-hint");
+  btn.disabled = true;
+  label.classList.add("hidden");
+  spinner.classList.remove("hidden");
+  hint.textContent = "";
+
+  const { entries, selectionOrder, usePrefix } = expandedState;
+  const byId = new Map(entries.map(e => [e.video_id, e]));
+  const selected = selectionOrder.map((vid, idx) => {
+    const e = byId.get(vid);
+    return {
+      video_id: e.video_id,
+      url: e.url,
+      title: e.title,
+      thumbnail_path: e.thumbnail_path,
+      duration: e.duration,
+      uploader: e.uploader,
+      playlist_index: e.playlist_index,
+      prefix: usePrefix ? idx + 1 : null,
+    };
+  });
+
+  try {
+    const res = await fetch(`${API}/api/previews/${id}/confirm`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ entries: selected }),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || "Could not queue selection");
+
+    expandedPreviewId = null;
+    expandedState = null;
+    await fetchPreviews();
+    refreshApproveBadge();
+    fetchQueue();
+    document.querySelector('.tab[data-tab="queue"]').click();
+  } catch (e) {
+    hint.textContent = `❌ ${e.message}`;
+    btn.disabled = false;
+    label.classList.remove("hidden");
+    spinner.classList.add("hidden");
+  }
 }
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -592,8 +906,8 @@ const convertHint          = document.getElementById("convert-hint");
 const convertCount         = document.getElementById("convert-count");
 const convertList          = document.getElementById("convert-list");
 
-let activeConvertBatchId = null;
-let convertPollTimer     = null;
+let activeBatches   = [];   // [{ id, label, jobs, done }]
+let convertPollTimer = null;
 
 function populateConvertQualityOptions() {
   const target = convertTargetSelect.value; // "MP3" or "3GP"
@@ -603,52 +917,94 @@ function populateConvertQualityOptions() {
 convertTargetSelect.addEventListener("change", populateConvertQualityOptions);
 populateConvertQualityOptions();
 
-function renderConvertJobs(jobs) {
-  if (!jobs.length) {
-    convertList.innerHTML = `<div class="empty-state"><div class="empty-icon">🔄</div><p>No conversions yet.<br>Use the "Batch convert" form on the left.</p></div>`;
-    return;
-  }
-  convertList.innerHTML = jobs.map(j => `
-    <div class="job-card" data-status="${j.status}">
-      <div class="job-card-inner">
-        <div class="job-card-body">
-          <div class="job-header">
-            <div class="job-title" title="${esc(j.source_filename)}">${esc(j.source_filename)}</div>
-            <div class="job-header-right"><span class="badge ${badgeClass(j.status)}">${j.status}</span></div>
-          </div>
-          <div class="job-meta-row">
-            <div class="job-meta"><span>${j.target_format}</span><span>${j.quality}</span></div>
-          </div>
-          <div class="progress-track"><div class="progress-fill" style="width:${j.progress_percent || 0}%"></div></div>
-          ${j.status === "failed" && j.error_message ? `<div class="job-error">${esc(j.error_message)}</div>` : ""}
-        </div>
-      </div>
-    </div>`).join("");
+function batchStats(jobs) {
+  const done      = jobs.filter(j => j.status === "completed").length;
+  const failed    = jobs.filter(j => j.status === "failed").length;
+  const skipped   = jobs.filter(j => j.status === "skipped").length;
+  const remaining = jobs.filter(j => j.status === "queued" || j.status === "converting").length;
+  return { done, failed, skipped, remaining };
 }
 
-async function pollConvertBatch() {
-  if (!activeConvertBatchId) return;
-  try {
-    const res  = await fetch(`${API}/api/local-convert/jobs?batch_id=${activeConvertBatchId}`);
-    const data = await res.json();
-    if (!data.ok) return;
-    const jobs = data.jobs;
-    renderConvertJobs(jobs);
+function renderConvertJobs() {
+  if (!activeBatches.length) {
+    convertList.innerHTML = `<div class="empty-state"><div class="empty-icon">🔄</div><p>No conversions yet.<br>Use the "Batch convert" form on the left.</p></div>`;
+    convertCount.textContent = "No batch running";
+    return;
+  }
 
-    const done      = jobs.filter(j => j.status === "completed").length;
-    const failed    = jobs.filter(j => j.status === "failed").length;
-    const skipped   = jobs.filter(j => j.status === "skipped").length;
-    const remaining = jobs.filter(j => j.status === "queued" || j.status === "converting").length;
+  const runningCount = activeBatches.filter(b => !b.done).length;
+  convertCount.textContent = runningCount > 0
+    ? `${runningCount} batch${runningCount > 1 ? "es" : ""} converting`
+    : `${activeBatches.length} batch${activeBatches.length > 1 ? "es" : ""} finished`;
 
-    convertCount.textContent = remaining > 0
-      ? `Converting… ${done + failed + skipped}/${jobs.length} done`
+  convertList.innerHTML = activeBatches.map(batch => {
+    const { done, failed, skipped, remaining } = batchStats(batch.jobs);
+    const summary = remaining > 0
+      ? `Converting… ${done + failed + skipped}/${batch.jobs.length} done`
       : `${done} converted · ${skipped} skipped · ${failed} failed`;
 
-    if (remaining === 0 && convertPollTimer) {
-      clearInterval(convertPollTimer);
-      convertPollTimer = null;
-    }
-  } catch {}
+    const jobsHtml = batch.jobs.map(j => `
+      <div class="job-card" data-status="${j.status}">
+        <div class="job-card-inner">
+          <div class="job-card-body">
+            <div class="job-header">
+              <div class="job-title" title="${esc(j.source_filename)}">${esc(j.source_filename)}</div>
+              <div class="job-header-right"><span class="badge ${badgeClass(j.status)}">${j.status}</span></div>
+            </div>
+            <div class="job-meta-row">
+              <div class="job-meta"><span>${j.target_format}</span><span>${j.quality}</span></div>
+            </div>
+            <div class="progress-track"><div class="progress-fill" style="width:${j.progress_percent || 0}%"></div></div>
+            ${j.status === "failed" && j.error_message ? `<div class="job-error">${esc(j.error_message)}</div>` : ""}
+          </div>
+        </div>
+      </div>`).join("");
+
+    return `
+      <div class="convert-batch-group" data-batch-id="${batch.id}">
+        <div class="convert-batch-header">
+          <div class="convert-batch-label">${esc(batch.label)}</div>
+          <div class="convert-batch-summary">
+            <span>${summary}</span>
+            ${batch.done ? `<button class="btn-tiny convert-batch-clear" data-batch-id="${batch.id}">Clear</button>` : ""}
+          </div>
+        </div>
+        <div class="convert-batch-jobs">${jobsHtml}</div>
+      </div>`;
+  }).join("");
+
+  convertList.querySelectorAll(".convert-batch-clear").forEach(btn => {
+    btn.addEventListener("click", () => {
+      activeBatches = activeBatches.filter(b => b.id !== btn.dataset.batchId);
+      renderConvertJobs();
+    });
+  });
+}
+
+async function pollAllBatches() {
+  const running = activeBatches.filter(b => !b.done);
+  if (!running.length) {
+    if (convertPollTimer) { clearInterval(convertPollTimer); convertPollTimer = null; }
+    return;
+  }
+
+  await Promise.all(running.map(async batch => {
+    try {
+      const res  = await fetch(`${API}/api/local-convert/jobs?batch_id=${batch.id}`);
+      const data = await res.json();
+      if (!data.ok) return;
+      batch.jobs = data.jobs;
+      const { remaining } = batchStats(batch.jobs);
+      if (remaining === 0) batch.done = true;
+    } catch {}
+  }));
+
+  renderConvertJobs();
+
+  if (activeBatches.every(b => b.done) && convertPollTimer) {
+    clearInterval(convertPollTimer);
+    convertPollTimer = null;
+  }
 }
 
 convertBtn.addEventListener("click", async () => {
@@ -665,11 +1021,12 @@ convertBtn.addEventListener("click", async () => {
   convertSpinner.classList.remove("hidden");
 
   try {
+    const target = convertTargetSelect.value;
     const res = await fetch(`${API}/api/local-convert`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         path,
-        target_format: convertTargetSelect.value,
+        target_format: target,
         quality: convertQualitySelect.value,
         recursive: convertRecursive.checked,
       }),
@@ -677,15 +1034,25 @@ convertBtn.addEventListener("click", async () => {
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || "Could not start conversion");
 
-    activeConvertBatchId = data.batch_id;
+    const folderLabel = path.split(/[\\/]/).filter(Boolean).pop() || path;
+    const timeLabel = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    activeBatches.push({
+      id: data.batch_id,
+      label: `${target} · ${folderLabel} · ${timeLabel}`,
+      jobs: [],
+      done: false,
+    });
+
     convertHint.textContent = `Found ${data.total} file(s) — ${data.queued} queued, ${data.skipped} already done.`;
 
     // switch to the Convert tab so the person sees progress immediately
     document.querySelector('.tab[data-tab="convert"]').click();
 
-    if (convertPollTimer) clearInterval(convertPollTimer);
-    pollConvertBatch();
-    convertPollTimer = setInterval(pollConvertBatch, 1500);
+    renderConvertJobs();
+    if (!convertPollTimer) {
+      pollAllBatches();
+      convertPollTimer = setInterval(pollAllBatches, 1500);
+    }
   } catch (e) {
     convertHint.textContent = `❌ ${e.message}`;
     convertHint.classList.add("error");
@@ -698,5 +1065,7 @@ convertBtn.addEventListener("click", async () => {
 // ── Boot + polling ────────────────────────────────────────────
 fetchQueue();
 fetchCookies();
+refreshApproveBadge();
 setInterval(fetchQueue, 2000);
 setInterval(fetchCookies, 8000);
+setInterval(refreshApproveBadge, 5000);

@@ -148,7 +148,9 @@ def build_filename(job: dict, ext: str) -> str:
     # on the same filename and silently overwrites one another.
     title = sanitize_name(job.get("original_title") or job.get("video_id") or "video")
     quality = job.get("quality") or "best"
-    return f"{title} [{quality}]{ext}"
+    prefix = job.get("selection_prefix")
+    stem = f"{int(prefix):02d} - {title}" if prefix is not None else title
+    return f"{stem} [{quality}]{ext}"
 
 
 # ---------------------------------------------------------------

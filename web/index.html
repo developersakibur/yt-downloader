@@ -155,6 +155,7 @@
 
       <nav class="tab-bar">
         <button class="tab active" data-tab="queue">Queue</button>
+        <button class="tab" data-tab="approve">Approve <span class="tab-badge hidden" id="approve-badge"></span></button>
         <button class="tab" data-tab="history">History</button>
         <button class="tab" data-tab="convert">Convert</button>
         <button class="tab" data-tab="settings">Settings</button>
@@ -176,6 +177,14 @@
             <p>No downloads yet.<br>Paste a link to get started.</p>
           </div>
         </div>
+      </div>
+
+      <!-- APPROVE TAB (pending previews — from this app or the extension) -->
+      <div class="tab-panel" id="tab-approve">
+        <div class="panel-head">
+          <span class="panel-count" id="approve-count">Nothing pending</span>
+        </div>
+        <div id="approve-list" class="job-list"></div>
       </div>
 
       <!-- HISTORY TAB -->
