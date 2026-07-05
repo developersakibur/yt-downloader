@@ -101,6 +101,7 @@ body {
 .stat-chip--active { border-color: var(--accent); }
 .stat-chip--done   { border-color: var(--green);  }
 .stat-chip--fail   { border-color: var(--red);    }
+.stat-chip--speed  { border-color: var(--accent); }
 .stat-num { font-family: var(--mono); font-weight: 700; font-size: 13px; }
 .stat-lbl { color: var(--muted); }
 
@@ -366,6 +367,7 @@ body {
   min-width: 0;
 }
 .job-meta span { display: flex; align-items: center; gap: 3px; }
+.job-meta .job-speed { color: var(--accent); font-weight: 600; }
 
 /* Progress bar */
 .progress-track {
@@ -750,6 +752,7 @@ body {
 .tab-badge.hidden { display: none; }
 
 .badge-neutral { background: var(--surface2); color: var(--muted); border: 1px solid var(--border); }
+.badge-scanning { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); border: 1px solid var(--accent); }
 
 /* ===== APPROVE TAB (accordion of pending previews) ===== */
 .approve-card {

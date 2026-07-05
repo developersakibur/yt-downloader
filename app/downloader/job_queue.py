@@ -93,8 +93,16 @@ def mark_failed(job_id, error_message):
                   locked_by=None, locked_at=None)
 
 
-def set_progress(job_id, percent):
-    db.set_progress(job_id, percent)
+def set_progress(job_id, percent, speed_bytes_sec=None, eta_seconds=None):
+    db.set_progress(job_id, percent, speed_bytes_sec=speed_bytes_sec, eta_seconds=eta_seconds)
+
+
+def set_conversion_speed(job_id, speed_x):
+    db.set_conversion_speed(job_id, speed_x)
+
+
+def get_total_download_speed():
+    return db.get_total_download_speed()
 
 
 def mark_used_cookies(job_id):
@@ -172,6 +180,7 @@ def queue_stats():
     stats = {"total": len(all_jobs)}
     for j in all_jobs:
         stats[j["status"]] = stats.get(j["status"], 0) + 1
+    stats["total_speed_bytes_sec"] = db.get_total_download_speed()
     return stats
 
 

@@ -92,30 +92,37 @@ def post_scan():
     return jsonify({"ok": True, "scan_id": scan_id})
 
 
-def _run_preview(scan_id, url, quantity, force_playlist, format, quality, source):
+def _run_preview(scan_id, preview_id, url, quantity, force_playlist, format, quality, source):
+    def on_progress(fetched, total):
+        with _scan_lock:
+            entry = _scan_registry.get(scan_id)
+            if entry is not None:
+                entry["progress"] = {"fetched": fetched, "total": total}
+
+    def on_entries(new_entries):
+        # Called once per video as its metadata+thumbnail become ready —
+        # push it into the DB immediately so the Approve tab can show it
+        # right away instead of waiting for the whole scan to finish.
+        db.append_preview_entries(preview_id, new_entries)
+
     try:
-        result = scanner.scan_preview(url, quantity=quantity, force_playlist=force_playlist)
-        preview_id = str(uuid.uuid4())
-        db.create_pending_preview(
-            id_=preview_id,
-            type_=result["type"],
-            group_name=result["group_name"],
-            source_url=result["source_url"],
-            format=format,
-            quality=quality,
-            video_count=len(result["entries"]),
-            entries_json=json.dumps(result["entries"]),
-            source=source,
-        )
+        result = scanner.scan_preview(url, quantity=quantity, force_playlist=force_playlist,
+                                       on_progress=on_progress, on_entries=on_entries)
+        db.finish_preview_scan(preview_id, group_name=result["group_name"])
         with _scan_lock:
             _scan_registry[scan_id] = {
                 "status": "done",
                 "result": {"preview_id": preview_id, "video_count": len(result["entries"])},
                 "error": None,
+                "progress": _scan_registry.get(scan_id, {}).get("progress"),
             }
     except Exception as e:
+        # Scan failed partway — whatever entries already streamed into
+        # the preview stay there (partial-approve is allowed), we just
+        # flip it out of 'scanning' so the UI stops waiting for more.
+        db.finish_preview_scan(preview_id)
         with _scan_lock:
-            _scan_registry[scan_id] = {"status": "error", "result": None, "error": str(e)}
+            _scan_registry[scan_id] = {"status": "error", "result": None, "error": str(e), "progress": None}
 
 
 @api.route("/scan/preview", methods=["POST"])
@@ -141,16 +148,35 @@ def post_scan_preview():
     if not scanner.is_valid_youtube_url(url):
         return jsonify({"ok": False, "error": "not a valid YouTube URL"}), 400
 
+    url_type = scanner.detect_type(url, force_playlist=force_playlist)
+    if url_type == "unknown":
+        return jsonify({"ok": False, "error": f"Could not recognize URL type: {url}"}), 400
+
     scan_id = str(uuid.uuid4())
+    preview_id = str(uuid.uuid4())
     with _scan_lock:
-        _scan_registry[scan_id] = {"status": "pending", "result": None, "error": None}
+        _scan_registry[scan_id] = {"status": "pending", "result": None, "error": None, "progress": None}
+
+    # Create the preview row NOW, before any scanning happens — entries
+    # stream into it one by one as they're found (see _run_preview), so
+    # the Approve tab can show + let the person start selecting videos
+    # while the scan is still in progress, not just once it's all done.
+    db.create_streaming_preview(
+        id_=preview_id,
+        type_=url_type,
+        group_name=scanner._group_name_for(url_type),
+        source_url=url,
+        format=format,
+        quality=quality,
+        source=source,
+    )
 
     threading.Thread(
         target=_run_preview,
-        args=(scan_id, url, quantity, force_playlist, format, quality, source),
+        args=(scan_id, preview_id, url, quantity, force_playlist, format, quality, source),
         daemon=True,
     ).start()
-    return jsonify({"ok": True, "scan_id": scan_id})
+    return jsonify({"ok": True, "scan_id": scan_id, "preview_id": preview_id})
 
 
 @api.route("/scan/status/<scan_id>")
@@ -160,6 +186,24 @@ def get_scan_status(scan_id):
     if entry is None:
         return jsonify({"ok": False, "error": "unknown scan_id"}), 404
     return jsonify({"ok": True, **entry})
+
+
+@api.route("/scan/count")
+def get_scan_count():
+    """Fast video-count lookup — used for the 'Whole playlist' scope
+    option on a video+list URL (web + extension), so the person sees how
+    many videos are actually in it before committing to a full scan."""
+    url = (request.args.get("url") or "").strip()
+    force_playlist = request.args.get("playlist", "false").lower() == "true"
+    if not url:
+        return jsonify({"ok": False, "error": "url required"}), 400
+    if not scanner.is_valid_youtube_url(url):
+        return jsonify({"ok": False, "error": "not a valid YouTube URL"}), 400
+    try:
+        result = scanner.quick_count(url, force_playlist=force_playlist)
+        return jsonify({"ok": True, **result})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 400
 
 
 # ---------------------------------------------------------------
@@ -479,3 +523,34 @@ def get_local_convert_jobs():
     if not batch_id:
         return jsonify({"ok": False, "error": "batch_id required"}), 400
     return jsonify({"ok": True, "jobs": converter.list_batch_jobs(batch_id)})
+
+
+_CONVERT_ACTIONS = {
+    "pause": converter.pause_job,
+    "resume": converter.resume_job,
+    "skip": converter.skip_job,
+}
+
+
+@api.route("/local-convert/jobs/<int:job_id>", methods=["PATCH"])
+def patch_local_convert_job(job_id):
+    data = request.get_json(force=True) or {}
+    action = data.get("action")
+    if action not in _CONVERT_ACTIONS:
+        return jsonify({"ok": False, "error": f"action must be one of {sorted(_CONVERT_ACTIONS)}"}), 400
+    try:
+        job = _CONVERT_ACTIONS[action](job_id)
+        return jsonify({"ok": True, "job": job})
+    except converter.InvalidTransition as e:
+        return jsonify({"ok": False, "error": str(e)}), 409
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 404
+
+
+@api.route("/local-convert/jobs/<int:job_id>", methods=["DELETE"])
+def delete_local_convert_job(job_id):
+    try:
+        converter.delete_job(job_id)
+    except ValueError as e:
+        return jsonify({"ok": False, "error": str(e)}), 404
+    return jsonify({"ok": True})

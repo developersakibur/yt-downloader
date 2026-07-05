@@ -26,6 +26,58 @@ ALLOWED_VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", "
 # re-convert our own output on a repeat run, or loop on itself).
 OUTPUT_SUBFOLDER_NAMES = {"MP3", "3GP"}
 
+# ---------------------------------------------------------------
+# LIVE PROCESS TRACKING — lets pause/skip/delete reach into an
+# in-flight ffmpeg conversion. Windows has no real process pause/resume
+# (no SIGSTOP/SIGCONT), so "pause" on a *currently converting* job means:
+# kill the ffmpeg process now, discard the partial output, mark the job
+# 'paused'. Resuming starts that file over from scratch. Queued jobs are
+# unaffected by this limitation — pausing those is just a status flip
+# that stops a worker from ever claiming them.
+# ---------------------------------------------------------------
+
+_active_processes = {}   # job_id -> subprocess.Popen, only while actually converting
+_kill_intent = {}        # job_id -> status to apply once the killed process's exception lands
+_process_lock = threading.Lock()
+
+_batch_worker_counts = {}  # batch_id -> number of live worker threads
+_batch_lock = threading.Lock()
+
+
+def _register_process(job_id, proc):
+    with _process_lock:
+        _active_processes[job_id] = proc
+
+
+def _unregister_process(job_id):
+    with _process_lock:
+        _active_processes.pop(job_id, None)
+        _kill_intent.pop(job_id, None)
+
+
+def _kill_running(job_id, target_status):
+    """Terminate an in-flight conversion for job_id, if one is running.
+    Returns True if a process was found and killed."""
+    with _process_lock:
+        proc = _active_processes.get(job_id)
+        if proc is None or proc.poll() is not None:
+            return False
+        _kill_intent[job_id] = target_status
+    try:
+        proc.terminate()
+    except Exception:
+        pass
+    return True
+
+
+def _cleanup_partial_output(job):
+    out = job.get("output_path")
+    if out and os.path.exists(out):
+        try:
+            os.remove(out)
+        except OSError:
+            pass
+
 
 def _iter_video_files(root: str, recursive: bool):
     root = os.path.abspath(root)
@@ -98,7 +150,7 @@ def start_batch(path: str, target_format: str, quality: str,
 
     concurrency = max(1, min(concurrency, 4))
     for _ in range(min(concurrency, queued_count) or 0):
-        threading.Thread(target=_worker_loop, args=(batch_id,), daemon=True).start()
+        _spawn_worker(batch_id)
 
     return {
         "batch_id": batch_id,
@@ -108,16 +160,114 @@ def start_batch(path: str, target_format: str, quality: str,
     }
 
 
+def _spawn_worker(batch_id):
+    with _batch_lock:
+        _batch_worker_counts[batch_id] = _batch_worker_counts.get(batch_id, 0) + 1
+    threading.Thread(target=_worker_loop, args=(batch_id,), daemon=True).start()
+
+
 def list_batch_jobs(batch_id: str) -> list[dict]:
     return db.list_local_conversion_jobs(batch_id)
 
 
+class InvalidTransition(Exception):
+    pass
+
+
+_ALLOWED_SOURCE = {
+    "pause":  {"queued", "converting"},
+    "resume": {"paused"},
+    "skip":   {"queued", "converting", "paused"},
+    "delete": {"queued", "converting", "paused", "completed", "failed", "skipped"},
+}
+
+
+def _job_or_raise(job_id):
+    job = db.get_local_conversion_job(job_id)
+    if job is None:
+        raise ValueError(f"conversion job {job_id} not found")
+    return job
+
+
+def _guard(job, action):
+    allowed = _ALLOWED_SOURCE[action]
+    if job["status"] not in allowed:
+        raise InvalidTransition(
+            f"cannot {action} conversion job {job['id']} from status '{job['status']}' "
+            f"(allowed from: {sorted(allowed)})"
+        )
+
+
+def pause_job(job_id):
+    """Queued: just flips the status so no worker ever claims it.
+    Converting: kills the ffmpeg process right now, discards the partial
+    output, and marks it 'paused' — resuming re-converts from scratch
+    (no real pause/resume on Windows for a running ffmpeg process)."""
+    job = _job_or_raise(job_id)
+    _guard(job, "pause")
+    if job["status"] == "converting":
+        _kill_running(job_id, "paused")
+        # status gets set to 'paused' by _convert_one's exception handler
+        # once the killed process actually raises — but set it here too in
+        # case of a race where it's already finished/transitioning.
+    else:
+        db.update_local_conversion_job(job_id, status="paused")
+    return db.get_local_conversion_job(job_id)
+
+
+def resume_job(job_id):
+    """Puts the job back in the queue, and — since a batch's worker
+    threads exit once nothing's left queued — spawns a fresh worker for
+    this batch if none are currently alive to pick it up."""
+    job = _job_or_raise(job_id)
+    _guard(job, "resume")
+    db.update_local_conversion_job(job_id, status="queued", progress_percent=0)
+    with _batch_lock:
+        alive = _batch_worker_counts.get(job["batch_id"], 0) > 0
+    if not alive:
+        _spawn_worker(job["batch_id"])
+    return db.get_local_conversion_job(job_id)
+
+
+def skip_job(job_id):
+    """Queued/paused: mark skipped immediately. Converting: kill the
+    process now and mark skipped once it unwinds."""
+    job = _job_or_raise(job_id)
+    _guard(job, "skip")
+    if job["status"] == "converting":
+        _kill_running(job_id, "skipped")
+    else:
+        db.update_local_conversion_job(job_id, status="skipped")
+    return db.get_local_conversion_job(job_id)
+
+
+def delete_job(job_id):
+    """Removes the row entirely. If it's mid-conversion, kill the process
+    first and clean up the partial output before deleting the row —
+    _convert_one sees the 'deleted' intent and skips its own DB update
+    (the row won't exist anymore by the time it unwinds)."""
+    job = _job_or_raise(job_id)
+    if job["status"] == "converting":
+        _kill_running(job_id, "deleted")
+    else:
+        _cleanup_partial_output(job)
+    db.delete_local_conversion_job(job_id)
+
+
 def _worker_loop(batch_id: str):
-    while True:
-        job = db.claim_next_local_conversion_job(batch_id)
-        if job is None:
-            return  # nothing left queued in this batch — this worker exits
-        _convert_one(job)
+    try:
+        while True:
+            job = db.claim_next_local_conversion_job(batch_id)
+            if job is None:
+                return  # nothing left queued in this batch — this worker exits
+            _convert_one(job)
+    finally:
+        with _batch_lock:
+            count = _batch_worker_counts.get(batch_id, 1) - 1
+            if count <= 0:
+                _batch_worker_counts.pop(batch_id, None)
+            else:
+                _batch_worker_counts[batch_id] = count
 
 
 def _convert_one(job: dict):
@@ -129,21 +279,42 @@ def _convert_one(job: dict):
         def on_progress(percent):
             db.update_local_conversion_job(job_id, progress_percent=round(min(percent, 99), 1))
 
+        def on_speed(speed_x):
+            db.update_local_conversion_job(job_id, conversion_speed_x=speed_x)
+
+        def on_process_start(proc):
+            _register_process(job_id, proc)
+
         if job["target_format"] == "MP3":
             bitrate = _worker.get_mp3_bitrate(job["quality"])
             _worker.ffmpeg_convert(
                 [job["source_path"]], job["output_path"],
                 ["-c:a", "libmp3lame", "-b:a", bitrate],
-                on_progress=on_progress,
+                on_progress=on_progress, on_speed=on_speed, on_process_start=on_process_start,
             )
         else:  # 3GP
             resolution, video_bitrate = _worker.get_3gp_profile(job["quality"])
             _worker.ffmpeg_convert(
                 [job["source_path"]], job["output_path"],
                 ["-s", resolution, "-c:v", "mpeg4", "-b:v", video_bitrate, "-c:a", "aac", "-ac", "1"],
-                on_progress=on_progress,
+                on_progress=on_progress, on_speed=on_speed, on_process_start=on_process_start,
             )
 
         db.update_local_conversion_job(job_id, status="completed", progress_percent=100)
     except Exception as e:
-        db.update_local_conversion_job(job_id, status="failed", error_message=str(e))
+        with _process_lock:
+            intent = _kill_intent.get(job_id)
+        if intent:
+            # This "failure" was actually us terminating the process on
+            # purpose (pause/skip/delete) — apply the intended status
+            # instead of recording it as a real error.
+            _cleanup_partial_output(job)
+            if intent != "deleted":
+                db.update_local_conversion_job(job_id, status=intent, progress_percent=0,
+                                                error_message=None, conversion_speed_x=None)
+            # 'deleted' intent: row is removed by the route handler itself,
+            # nothing left to update here.
+        else:
+            db.update_local_conversion_job(job_id, status="failed", error_message=str(e))
+    finally:
+        _unregister_process(job_id)

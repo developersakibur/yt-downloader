@@ -26,6 +26,7 @@ const qtyInput        = document.getElementById("qty-input");
 const qtyAllToggle    = document.getElementById("qty-all-toggle");
 const qtyHint         = document.getElementById("qty-hint");
 const scopeRow        = document.getElementById("scope-row");
+const scopeCountHint  = document.getElementById("scope-count-hint");
 const qualitySelect   = document.getElementById("quality-select");
 
 const views = {
@@ -84,10 +85,10 @@ function configureQtyRow(type) {
   qtyInput.disabled = false;
   if (type === "search") {
     qtyInput.min = 1;
-    qtyInput.max = 100;
-    if (parseInt(qtyInput.value || "0") > 100) qtyInput.value = 100;
+    qtyInput.max = 250;
+    if (parseInt(qtyInput.value || "0") > 250) qtyInput.value = 250;
     qtyAllToggle.parentElement.classList.add("hidden");
-    qtyHint.textContent = "Search results — max 100";
+    qtyHint.textContent = "Search results — max 250";
   } else {
     qtyInput.min = 1;
     qtyInput.removeAttribute("max");
@@ -130,9 +131,25 @@ async function loadCurrentTab() {
     configureQtyRow(type);
     showView("form", [qtyRow]);
   } else if (type === "video+list") {
+    scopeCountHint.textContent = "Checking playlist size…";
     showView("form", [scopeRow]);
+    fetchScopeCount(url);
   } else {
     showView("form");
+  }
+}
+
+async function fetchScopeCount(url) {
+  try {
+    const res  = await fetch(`${API}/api/scan/count?url=${encodeURIComponent(url)}&playlist=true`);
+    const data = await res.json();
+    if (data.ok && data.count) {
+      scopeCountHint.textContent = `This playlist has ${data.count} video${data.count !== 1 ? "s" : ""}.`;
+    } else {
+      scopeCountHint.textContent = "";
+    }
+  } catch {
+    scopeCountHint.textContent = "";
   }
 }
 
@@ -311,18 +328,14 @@ downloadBtn.addEventListener("click", async () => {
 });
 
 function pollPreviewScan(scanId, attempt = 0) {
-  if (attempt > 60) {
-    setStatus(dlStatus, "❌ Scan timed out.", "err");
-    resetDownloadBtn();
-    return;
-  }
   clearTimeout(pollTimer);
   pollTimer = setTimeout(async () => {
     try {
       const r = await fetch(`${API}/api/scan/status/${scanId}`);
       const d = await r.json();
       if (d.status === "pending") {
-        setStatus(dlStatus, `Scanning… (${attempt + 1})`);
+        const p = d.progress;
+        setStatus(dlStatus, p && p.total ? `Scanning… ${p.fetched}/${p.total}` : "Scanning…");
         pollPreviewScan(scanId, attempt + 1);
         return;
       }

@@ -10,6 +10,7 @@ const qtyInput        = document.getElementById("qty-input");
 const qtyAllToggle    = document.getElementById("qty-all-toggle");
 const qtyHint         = document.getElementById("qty-hint");
 const scopeRow        = document.getElementById("scope-row");
+const scopeCountHint  = document.getElementById("scope-count-hint");
 const qualitySelect   = document.getElementById("quality-select");
 const downloadBtn     = document.getElementById("download-btn");
 const downloadBtnLbl  = document.getElementById("download-btn-label");
@@ -32,7 +33,24 @@ const statNums = {
   downloading: document.getElementById("stat-downloading-n"),
   completed:   document.getElementById("stat-completed-n"),
   failed:      document.getElementById("stat-failed-n"),
+  speed:       document.getElementById("stat-speed-n"),
 };
+const statSpeedChip = document.getElementById("stat-speed");
+
+// ── Speed / ETA formatting helpers ──────────────────────────────
+function fmtSpeed(bytesPerSec) {
+  if (!bytesPerSec || bytesPerSec <= 0) return "";
+  const kb = bytesPerSec / 1024;
+  if (kb < 1024) return `${kb.toFixed(0)} KB/s`;
+  return `${(kb / 1024).toFixed(1)} MB/s`;
+}
+function fmtEta(seconds) {
+  if (!seconds || seconds <= 0) return "";
+  if (seconds < 60) return `${Math.round(seconds)}s left`;
+  const m = Math.floor(seconds / 60);
+  const s = Math.round(seconds % 60);
+  return m < 60 ? `${m}m ${s}s left` : `${Math.floor(m / 60)}h ${m % 60}m left`;
+}
 
 // ── State ─────────────────────────────────────────────────────
 let activeScanId   = null;
@@ -101,23 +119,23 @@ populateQualityOptions(); // initial fill on page load
 
 // ── URL form ──────────────────────────────────────────────────
 // Quantity row behavior differs by type:
-//   search            -> hard-capped at 100, "All" doesn't apply (endless feed)
-//   playlist / channel -> no upper cap, "All" downloads everything
+//   search            -> hard-capped at 250, "All" doesn't apply (endless feed)
+//   playlist / channel -> "All" means everything, up to a 999 safety cap
 function configureQtyRow(type) {
   qtyAllToggle.checked = false;
   qtyAllToggle.parentElement.classList.remove("checked");
   qtyInput.disabled = false;
   if (type === "search") {
     qtyInput.min = 1;
-    qtyInput.max = 100;
-    if (parseInt(qtyInput.value || "0") > 100) qtyInput.value = 100;
+    qtyInput.max = 250;
+    if (parseInt(qtyInput.value || "0") > 250) qtyInput.value = 250;
     qtyAllToggle.parentElement.classList.add("hidden"); // no "All" concept for search
-    qtyHint.textContent = "Search results — max 100";
+    qtyHint.textContent = "Search results — max 250";
   } else {
     qtyInput.min = 1;
     qtyInput.removeAttribute("max");
     qtyAllToggle.parentElement.classList.remove("hidden");
-    qtyHint.textContent = "";
+    qtyHint.textContent = "\"All\" fetches everything in the playlist/channel, up to 999";
   }
 }
 
@@ -143,6 +161,8 @@ function updateFormUI() {
   const type = detectUrlType(url);
   qtyRow.classList.add("hidden");
   scopeRow.classList.add("hidden");
+  scopeCountHint.textContent = "";
+  clearTimeout(scopeCountTimer);
   urlHint.className = "url-hint";
   urlHint.textContent = "";
   if (!url) { downloadBtn.disabled = true; return; }
@@ -157,9 +177,29 @@ function updateFormUI() {
     qtyRow.classList.remove("hidden");
     configureQtyRow(type);
   }
-  if (type === "video+list") scopeRow.classList.remove("hidden");
+  if (type === "video+list") {
+    scopeRow.classList.remove("hidden");
+    scopeCountHint.textContent = "Checking playlist size…";
+    scopeCountTimer = setTimeout(() => fetchScopeCount(url), 400); // debounce typing
+  }
 }
 urlInput.addEventListener("input", updateFormUI);
+
+let scopeCountTimer = null;
+async function fetchScopeCount(url) {
+  try {
+    const res  = await fetch(`${API}/api/scan/count?url=${encodeURIComponent(url)}&playlist=true`);
+    const data = await res.json();
+    if (urlInput.value.trim() !== url) return; // URL changed while this was in flight — stale, ignore
+    if (data.ok && data.count) {
+      scopeCountHint.textContent = `This playlist has ${data.count} video${data.count !== 1 ? "s" : ""}.`;
+    } else {
+      scopeCountHint.textContent = "";
+    }
+  } catch {
+    scopeCountHint.textContent = "";
+  }
+}
 
 // ── Scan submission ───────────────────────────────────────────
 // Group-type URLs (playlist / search / channel / "whole playlist" scope)
@@ -197,8 +237,12 @@ downloadBtn.addEventListener("click", async () => {
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || "scan rejected");
       activePreviewScanId = data.scan_id;
-      urlHint.textContent = "Scanning…";
+      urlHint.textContent = "Scanning… check the Approve tab, videos will appear as they're found.";
       urlHint.className   = "url-hint";
+      urlInput.value = "";
+      updateFormUI();
+      refreshApproveBadge();
+      if (document.querySelector('.tab[data-tab="approve"]').classList.contains("active")) fetchPreviews();
       pollPreview();
     } catch (e) {
       urlHint.textContent = `❌ ${e.message}`;
@@ -274,7 +318,15 @@ function pollPreview() {
     try {
       const res  = await fetch(`${API}/api/scan/status/${activePreviewScanId}`);
       const data = await res.json();
-      if (data.status === "pending") { pollPreview(); return; }
+      if (data.status === "pending") {
+        const p = data.progress;
+        urlHint.textContent = (p && p.total)
+          ? `Scanning… ${p.fetched}/${p.total}`
+          : "Scanning…";
+        urlHint.className = "url-hint";
+        pollPreview();
+        return;
+      }
       if (data.status === "done") {
         const n = data.result.video_count;
         urlHint.textContent = `✓ Found ${n} video${n !== 1 ? "s" : ""} — review and confirm in the Approve tab.`;
@@ -333,6 +385,49 @@ async function fetchPreviews() {
     if (!data.ok) return;
     previewSummaries = data.previews;
     renderApproveList();
+    _syncPreviewAutoRefresh();
+  } catch {}
+}
+
+// Keeps the Approve tab live while any preview is still streaming
+// entries in — polls the summary list (for the growing count on
+// collapsed cards) and, if one happens to be expanded, that card's full
+// entry list too, until its scan_status flips to 'complete'.
+let previewAutoRefreshTimer = null;
+
+function _syncPreviewAutoRefresh() {
+  const anyScanning = previewSummaries.some(p => p.scan_status === "scanning");
+  if (anyScanning && !previewAutoRefreshTimer) {
+    previewAutoRefreshTimer = setInterval(async () => {
+      await fetchPreviews();
+      if (expandedPreviewId) {
+        const p = previewSummaries.find(s => s.id === expandedPreviewId);
+        if (p && p.scan_status === "scanning") await _refreshExpandedEntries(expandedPreviewId);
+      }
+    }, 2000);
+  } else if (!anyScanning && previewAutoRefreshTimer) {
+    clearInterval(previewAutoRefreshTimer);
+    previewAutoRefreshTimer = null;
+  }
+}
+
+async function _refreshExpandedEntries(id) {
+  try {
+    const res  = await fetch(`${API}/api/previews/${id}`);
+    const data = await res.json();
+    if (!data.ok || !expandedState) return;
+    const knownIds = new Set(expandedState.entries.map(e => e.video_id));
+    const freshEntries = data.preview.entries;
+    // Newly-arrived videos default to selected (appended to the end of
+    // the selection order), same as the initial load — existing
+    // selections/deselections the person already made are untouched.
+    for (const e of freshEntries) {
+      if (!knownIds.has(e.video_id)) {
+        expandedState.selectionOrder.push(e.video_id);
+      }
+    }
+    expandedState.entries = freshEntries;
+    renderExpandedBody(id);
   } catch {}
 }
 
@@ -348,6 +443,7 @@ function renderApproveList() {
 
   approveList.innerHTML = previewSummaries.map(p => {
     const isOpen = p.id === expandedPreviewId;
+    const scanning = p.scan_status === "scanning";
     return `
       <div class="approve-card ${isOpen ? "open" : ""}" data-preview-id="${p.id}">
         <div class="approve-card-header">
@@ -356,9 +452,10 @@ function renderApproveList() {
             <span>${esc(p.group_name)}</span>
             <span class="badge badge-neutral">${p.type}</span>
             ${p.source === "extension" ? `<span class="badge badge-neutral">extension</span>` : ""}
+            ${scanning ? `<span class="badge badge-scanning">⏳ scanning</span>` : ""}
           </div>
           <div class="approve-card-meta">
-            <span>${p.video_count} videos · ${esc(p.format)}/${esc(p.quality)}</span>
+            <span>${p.video_count} video${p.video_count !== 1 ? "s" : ""}${scanning ? " so far…" : ""} · ${esc(p.format)}/${esc(p.quality)}</span>
             <button class="btn-tiny approve-delete-btn" data-preview-id="${p.id}" title="Delete this pending scan">Delete</button>
           </div>
         </div>
@@ -470,21 +567,48 @@ function renderExpandedBody(id) {
       } else {
         expandedState.selectionOrder = expandedState.selectionOrder.filter(v => v !== vid);
       }
-      renderExpandedBody(id); // renumber, no gaps
+      updateSelectionUI(id); // renumber in place — no full re-render, no scroll jump
     });
   });
   body.querySelector(".approve-select-all").addEventListener("click", () => {
     expandedState.selectionOrder = expandedState.entries.map(e => e.video_id);
-    renderExpandedBody(id);
+    updateSelectionUI(id);
   });
   body.querySelector(".approve-deselect-all").addEventListener("click", () => {
     expandedState.selectionOrder = [];
-    renderExpandedBody(id);
+    updateSelectionUI(id);
   });
   body.querySelector(".approve-prefix-toggle").addEventListener("change", (ev) => {
     expandedState.usePrefix = ev.target.checked;
   });
   body.querySelector(".approve-confirm-btn").addEventListener("click", () => confirmApprovePreview(id));
+}
+
+// Updates selection state (checkbox checked-ness, prefix numbers,
+// deselected styling, count, confirm button) on the EXISTING DOM nodes
+// instead of rebuilding the list — rebuilding via innerHTML was
+// resetting scroll position to the top on every single click.
+function updateSelectionUI(id) {
+  const body = document.getElementById(`approve-body-${id}`);
+  if (!body || !expandedState) return;
+  const { selectionOrder } = expandedState;
+  const orderIndex = new Map(selectionOrder.map((vid, i) => [vid, i + 1]));
+
+  body.querySelectorAll(".batch-item").forEach(label => {
+    const vid = label.dataset.videoId;
+    const selected = orderIndex.has(vid);
+    label.classList.toggle("deselected", !selected);
+    const cb = label.querySelector(".batch-item-check");
+    if (cb) cb.checked = selected;
+    const prefixEl = label.querySelector(".batch-item-prefix");
+    if (prefixEl) prefixEl.textContent = selected ? orderIndex.get(vid) : "";
+  });
+
+  const countEl = body.querySelector(".batch-selected-count");
+  if (countEl) countEl.textContent = `${selectionOrder.length} selected`;
+
+  const confirmBtn = body.querySelector(".approve-confirm-btn");
+  if (confirmBtn) confirmBtn.disabled = selectionOrder.length === 0;
 }
 
 async function confirmApprovePreview(id) {
@@ -578,6 +702,12 @@ function jobCardHTML(job) {
   const retryBadge  = job.retry_count > 0 ? `<span>retry #${job.retry_count}</span>` : "";
   const idxBadge    = job.playlist_index != null ? `<span>#${job.playlist_index}</span>` : "";
   const error    = job.error_message ? `<div class="job-error">${esc(job.error_message.slice(0,200))}</div>` : "";
+  const speedBadge = job.status === "downloading" && job.speed_bytes_sec
+    ? `<span class="job-speed">↓ ${fmtSpeed(job.speed_bytes_sec)}${job.eta_seconds ? " · " + fmtEta(job.eta_seconds) : ""}</span>`
+    : "";
+  const convSpeedBadge = job.status === "converting" && job.conversion_speed_x
+    ? `<span class="job-speed">⚙ ${job.conversion_speed_x.toFixed(1)}x</span>`
+    : "";
   const thumb    = job.video_id
     ? `<img class="job-thumb" src="${API}/thumbnails/${job.video_id}.jpg" loading="lazy" onerror="this.style.display='none'">`
     : `<div class="job-thumb-placeholder"></div>`;
@@ -600,6 +730,8 @@ function jobCardHTML(job) {
               idxBadge,
               retryBadge,
               cookieBadge,
+              speedBadge,
+              convSpeedBadge,
               (pct > 0 && pct < 100) ? `${pct}%` : ""
             ].filter(Boolean).map(x => `<span>${x}</span>`).join("")}</div>
             <div class="job-actions">${actionButtons(job)}</div>
@@ -663,6 +795,15 @@ async function fetchQueue() {
     statNums.downloading.textContent = (stats.downloading||0) + (stats.converting||0);
     statNums.completed.textContent   = stats.completed || 0;
     statNums.failed.textContent      = stats.failed || 0;
+
+    const totalSpeed = stats.total_speed_bytes_sec || 0;
+    if (totalSpeed > 0) {
+      statSpeedChip.classList.remove("hidden");
+      statNums.speed.textContent = fmtSpeed(totalSpeed);
+    } else {
+      statSpeedChip.classList.add("hidden");
+    }
+
     serverPill.textContent = "● online";
     serverPill.className   = "server-pill";
 
@@ -921,8 +1062,23 @@ function batchStats(jobs) {
   const done      = jobs.filter(j => j.status === "completed").length;
   const failed    = jobs.filter(j => j.status === "failed").length;
   const skipped   = jobs.filter(j => j.status === "skipped").length;
-  const remaining = jobs.filter(j => j.status === "queued" || j.status === "converting").length;
-  return { done, failed, skipped, remaining };
+  const paused    = jobs.filter(j => j.status === "paused").length;
+  const remaining = jobs.filter(j => j.status === "queued" || j.status === "converting" || j.status === "paused").length;
+  return { done, failed, skipped, paused, remaining };
+}
+
+function convertActionButtons(job) {
+  const s = job.status;
+  const id = job.id;
+  const btns = [];
+  if (s === "queued" || s === "converting")
+    btns.push(`<button class="job-btn" data-conv-action="pause" data-conv-id="${id}">⏸ Pause</button>`);
+  if (s === "paused")
+    btns.push(`<button class="job-btn success" data-conv-action="resume" data-conv-id="${id}">▶ Resume</button>`);
+  if (["queued", "converting", "paused"].includes(s))
+    btns.push(`<button class="job-btn" data-conv-action="skip" data-conv-id="${id}">⤼ Skip</button>`);
+  btns.push(`<button class="job-btn danger" data-conv-action="delete" data-conv-id="${id}">🗑</button>`);
+  return btns.join("");
 }
 
 function renderConvertJobs() {
@@ -943,7 +1099,10 @@ function renderConvertJobs() {
       ? `Converting… ${done + failed + skipped}/${batch.jobs.length} done`
       : `${done} converted · ${skipped} skipped · ${failed} failed`;
 
-    const jobsHtml = batch.jobs.map(j => `
+    const jobsHtml = batch.jobs.map(j => {
+      const convSpeed = j.status === "converting" && j.conversion_speed_x
+        ? `<span class="job-speed">⚙ ${Number(j.conversion_speed_x).toFixed(1)}x</span>` : "";
+      return `
       <div class="job-card" data-status="${j.status}">
         <div class="job-card-inner">
           <div class="job-card-body">
@@ -952,13 +1111,15 @@ function renderConvertJobs() {
               <div class="job-header-right"><span class="badge ${badgeClass(j.status)}">${j.status}</span></div>
             </div>
             <div class="job-meta-row">
-              <div class="job-meta"><span>${j.target_format}</span><span>${j.quality}</span></div>
+              <div class="job-meta"><span>${j.target_format}</span><span>${j.quality}</span>${convSpeed}</div>
+              <div class="job-actions">${convertActionButtons(j)}</div>
             </div>
             <div class="progress-track"><div class="progress-fill" style="width:${j.progress_percent || 0}%"></div></div>
             ${j.status === "failed" && j.error_message ? `<div class="job-error">${esc(j.error_message)}</div>` : ""}
           </div>
         </div>
-      </div>`).join("");
+      </div>`;
+    }).join("");
 
     return `
       <div class="convert-batch-group" data-batch-id="${batch.id}">
@@ -977,6 +1138,28 @@ function renderConvertJobs() {
     btn.addEventListener("click", () => {
       activeBatches = activeBatches.filter(b => b.id !== btn.dataset.batchId);
       renderConvertJobs();
+    });
+  });
+
+  convertList.querySelectorAll("[data-conv-action]").forEach(btn => {
+    btn.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      const action = btn.dataset.convAction;
+      const jobId  = btn.dataset.convId;
+      if (action === "delete") {
+        if (!confirm("Delete this conversion job? Any partial output will be removed.")) return;
+        await fetch(`${API}/api/local-convert/jobs/${jobId}`, { method: "DELETE" }).catch(() => {});
+      } else {
+        await fetch(`${API}/api/local-convert/jobs/${jobId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action }),
+        }).catch(() => {});
+      }
+      // Resuming a batch whose workers had all exited needs polling
+      // restarted, since pollAllBatches stops once everything looked done.
+      if (!convertPollTimer) convertPollTimer = setInterval(pollAllBatches, 1500);
+      pollAllBatches();
     });
   });
 }

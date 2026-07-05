@@ -14,6 +14,7 @@ the functions defined here.
 
 import os
 import sqlite3
+import json
 import threading
 from contextlib import contextmanager
 from datetime import datetime
@@ -87,13 +88,62 @@ def _migrate(conn):
     migrations = [
         "ALTER TABLE video_jobs ADD COLUMN quality TEXT NOT NULL DEFAULT 'best'",
         "ALTER TABLE video_jobs ADD COLUMN selection_prefix INTEGER",
+        "ALTER TABLE video_jobs ADD COLUMN speed_bytes_sec REAL",
+        "ALTER TABLE video_jobs ADD COLUMN eta_seconds INTEGER",
+        "ALTER TABLE video_jobs ADD COLUMN conversion_speed_x REAL",
+        "ALTER TABLE local_conversion_jobs ADD COLUMN conversion_speed_x REAL",
+        "ALTER TABLE pending_previews ADD COLUMN scan_status TEXT NOT NULL DEFAULT 'complete'",
     ]
+    _migrate_local_conversion_status(conn)
+
     for stmt in migrations:
         try:
             conn.execute(stmt)
             conn.commit()
         except sqlite3.OperationalError:
             pass  # column already exists — already migrated
+
+
+def _migrate_local_conversion_status(conn):
+    """SQLite can't ALTER a CHECK constraint in place, so if an existing
+    local_conversion_jobs table predates the 'paused' status, rebuild it:
+    rename -> create new with the wider CHECK -> copy rows -> drop old.
+    Safe to call every startup — no-ops once already migrated."""
+    cur = conn.cursor()
+    cur.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='local_conversion_jobs'")
+    row = cur.fetchone()
+    if row is None or row[0] is None or "'paused'" in row[0]:
+        return  # table doesn't exist yet (fresh install) or already migrated
+    cur.execute("ALTER TABLE local_conversion_jobs RENAME TO local_conversion_jobs_old")
+    cur.execute("""
+        CREATE TABLE local_conversion_jobs (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            batch_id            TEXT NOT NULL,
+            source_path         TEXT NOT NULL,
+            source_filename     TEXT NOT NULL,
+            target_format       TEXT NOT NULL CHECK (target_format IN ('MP3', '3GP')),
+            quality             TEXT NOT NULL DEFAULT 'best',
+            status              TEXT NOT NULL DEFAULT 'queued' CHECK (status IN (
+                                    'queued', 'converting', 'completed', 'failed', 'skipped', 'paused'
+                                )),
+            progress_percent    REAL NOT NULL DEFAULT 0,
+            output_path         TEXT,
+            error_message       TEXT,
+            created_at          TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at          TEXT NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+    cur.execute("""
+        INSERT INTO local_conversion_jobs
+            (id, batch_id, source_path, source_filename, target_format, quality,
+             status, progress_percent, output_path, error_message, created_at, updated_at)
+        SELECT id, batch_id, source_path, source_filename, target_format, quality,
+               status, progress_percent, output_path, error_message, created_at, updated_at
+        FROM local_conversion_jobs_old
+    """)
+    cur.execute("DROP TABLE local_conversion_jobs_old")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_local_conv_batch ON local_conversion_jobs(batch_id)")
+    conn.commit()
 
 
 def _row_to_dict(row):
@@ -253,14 +303,38 @@ def claim_next_queued_job(worker_name):
         return _row_to_dict(cur.fetchone())
 
 
-def set_progress(job_id, percent, status=None):
+def set_progress(job_id, percent, status=None, speed_bytes_sec=None, eta_seconds=None):
     fields = {"progress_percent": percent, "updated_at": _now()}
     if status:
         fields["status"] = status
+    if speed_bytes_sec is not None:
+        fields["speed_bytes_sec"] = speed_bytes_sec
+    if eta_seconds is not None:
+        fields["eta_seconds"] = eta_seconds
     cols = ", ".join(f"{k} = ?" for k in fields)
     values = list(fields.values()) + [job_id]
     with cursor(write=True) as cur:
         cur.execute(f"UPDATE video_jobs SET {cols} WHERE id = ?", values)
+
+
+def set_conversion_speed(job_id, speed_x):
+    with cursor(write=True) as cur:
+        cur.execute(
+            "UPDATE video_jobs SET conversion_speed_x = ?, updated_at = ? WHERE id = ?",
+            (speed_x, _now(), job_id),
+        )
+
+
+def get_total_download_speed():
+    """Sum of speed_bytes_sec across all currently-downloading jobs.
+    Used for the top-bar 'current total speed' indicator."""
+    with cursor() as cur:
+        cur.execute(
+            "SELECT COALESCE(SUM(speed_bytes_sec), 0) AS total "
+            "FROM video_jobs WHERE status = 'downloading' AND speed_bytes_sec IS NOT NULL"
+        )
+        row = cur.fetchone()
+        return row["total"] if row else 0
 
 
 # =================================================================
@@ -385,6 +459,17 @@ def list_local_conversion_jobs(batch_id):
         return _rows_to_dicts(cur.fetchall())
 
 
+def get_local_conversion_job(job_id):
+    with cursor() as cur:
+        cur.execute("SELECT * FROM local_conversion_jobs WHERE id = ?", (job_id,))
+        return _row_to_dict(cur.fetchone())
+
+
+def delete_local_conversion_job(job_id):
+    with cursor(write=True) as cur:
+        cur.execute("DELETE FROM local_conversion_jobs WHERE id = ?", (job_id,))
+
+
 # =================================================================
 # PENDING PREVIEWS (Approve tab)
 # =================================================================
@@ -395,12 +480,64 @@ def create_pending_preview(id_, type_, group_name, source_url, format, quality,
         cur.execute(
             """INSERT INTO pending_previews
                (id, type, group_name, source_url, format, quality,
-                video_count, entries_json, source)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                video_count, entries_json, scan_status, source)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'complete', ?)""",
             (id_, type_, group_name, source_url, format, quality,
              video_count, entries_json, source),
         )
         return id_
+
+
+def create_streaming_preview(id_, type_, group_name, source_url, format, quality, source="web"):
+    """Insert a preview row immediately, before the scan has actually
+    fetched any entries yet — status 'scanning'. append_preview_entries()
+    fills it in as results come in, so the Approve tab can show the card
+    (and let the person start selecting/confirming) while the scan is
+    still running, instead of waiting for the whole thing to finish."""
+    with cursor(write=True) as cur:
+        cur.execute(
+            """INSERT INTO pending_previews
+               (id, type, group_name, source_url, format, quality,
+                video_count, entries_json, scan_status, source)
+               VALUES (?, ?, ?, ?, ?, ?, 0, '[]', 'scanning', ?)""",
+            (id_, type_, group_name, source_url, format, quality, source),
+        )
+        return id_
+
+
+def append_preview_entries(id_, new_entries: list):
+    """Appends new_entries onto an existing preview's entries_json and
+    bumps video_count to match. Called repeatedly (once per video, or in
+    small batches) while a streaming scan is still running."""
+    if not new_entries:
+        return
+    with cursor(write=True) as cur:
+        cur.execute("SELECT entries_json FROM pending_previews WHERE id = ?", (id_,))
+        row = cur.fetchone()
+        if row is None:
+            return  # preview was deleted (e.g. user cancelled) — drop silently
+        current = json.loads(row["entries_json"])
+        current.extend(new_entries)
+        cur.execute(
+            "UPDATE pending_previews SET entries_json = ?, video_count = ? WHERE id = ?",
+            (json.dumps(current), len(current), id_),
+        )
+
+
+def finish_preview_scan(id_, group_name=None):
+    """Marks a streaming preview's scan as complete. group_name is passed
+    if it was only discoverable partway through the scan (e.g. playlist
+    title from the first chunk) and wasn't known at creation time."""
+    with cursor(write=True) as cur:
+        if group_name:
+            cur.execute(
+                "UPDATE pending_previews SET scan_status = 'complete', group_name = ? WHERE id = ?",
+                (group_name, id_),
+            )
+        else:
+            cur.execute(
+                "UPDATE pending_previews SET scan_status = 'complete' WHERE id = ?", (id_,)
+            )
 
 
 def list_pending_previews():
@@ -409,7 +546,7 @@ def list_pending_previews():
     with cursor() as cur:
         cur.execute(
             "SELECT id, type, group_name, source_url, format, quality, "
-            "video_count, source, created_at FROM pending_previews "
+            "video_count, scan_status, source, created_at FROM pending_previews "
             "ORDER BY created_at DESC"
         )
         return _rows_to_dicts(cur.fetchall())

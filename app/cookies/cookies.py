@@ -111,14 +111,30 @@ def status():
     return db_status
 
 
-def call_with_cookie_fallback(fn, *args, **kwargs):
-    """Run fn(*args, **kwargs, ydl_opts=opts) first WITHOUT cookies.
-    If it fails with a login/age/bot-detection style error AND cookies
-    are available, retry once WITH cookies. Returns (result, used_cookies).
+def call_with_cookie_fallback(fn, *args, prefer_cookies=False, **kwargs):
+    """Run fn(*args, **kwargs, ydl_opts=opts).
 
+    Normal case (prefer_cookies=False): run WITHOUT cookies first (Rule 1).
+    If it fails with a login/age/bot-detection style error AND cookies
+    are available, retry once WITH cookies.
+
+    prefer_cookies=True: use cookies from the very first attempt, if
+    available. This is for playlist/channel *bulk* scans specifically —
+    YouTube silently truncates anonymous browsing of long playlists
+    (e.g. only returning 100 of 162 items) without raising any error,
+    so the normal retry-on-failure path never even sees a reason to
+    retry. Cookies fix that truncation, so for these bulk fetches we
+    send cookies upfront whenever the user has them synced, rather
+    than waiting for a failure that will never come.
+
+    Returns (result, used_cookies).
     `fn` must accept a keyword argument `ydl_opts` and raise on failure.
     """
     base_opts = kwargs.pop("ydl_opts", {})
+
+    if prefer_cookies and cookies_available():
+        result = fn(*args, ydl_opts=with_cookies(base_opts), **kwargs)
+        return result, True
 
     try:
         result = fn(*args, ydl_opts=dict(base_opts), **kwargs)

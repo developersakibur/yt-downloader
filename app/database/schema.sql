@@ -130,7 +130,7 @@ CREATE TABLE IF NOT EXISTS local_conversion_jobs (
     target_format       TEXT NOT NULL CHECK (target_format IN ('MP3', '3GP')),
     quality             TEXT NOT NULL DEFAULT 'best',
     status              TEXT NOT NULL DEFAULT 'queued' CHECK (status IN (
-                            'queued', 'converting', 'completed', 'failed', 'skipped'
+                            'queued', 'converting', 'completed', 'failed', 'skipped', 'paused'
                         )),
     progress_percent    REAL NOT NULL DEFAULT 0,
     output_path         TEXT,
@@ -159,6 +159,7 @@ CREATE TABLE IF NOT EXISTS pending_previews (
     quality         TEXT NOT NULL DEFAULT 'best',
     video_count     INTEGER NOT NULL DEFAULT 0,
     entries_json    TEXT NOT NULL,          -- JSON list, see scanner.scan_preview()
+    scan_status     TEXT NOT NULL DEFAULT 'complete' CHECK (scan_status IN ('scanning', 'complete')),
     source          TEXT NOT NULL DEFAULT 'web',  -- 'web' or 'extension' — cosmetic, shown in Approve tab
     created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );

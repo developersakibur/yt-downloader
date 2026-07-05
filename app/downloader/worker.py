@@ -237,8 +237,13 @@ def get_3gp_profile(quality: str):
     return THREEGP_PROFILES.get(quality, THREEGP_PROFILES["320x240"])
 
 
-def ffmpeg_convert(input_files, output_file, ffmpeg_args=None, on_progress=None):
-    """Merge/convert with ffmpeg, reporting 0-100 progress via on_progress.
+def ffmpeg_convert(input_files, output_file, ffmpeg_args=None, on_progress=None, on_speed=None, on_process_start=None):
+    """Merge/convert with ffmpeg, reporting 0-100 progress via on_progress,
+    and current encode speed (e.g. 2.5 meaning '2.5x realtime') via
+    on_speed, parsed straight from ffmpeg's own 'speed=2.5x' stderr field.
+    on_process_start(process), if given, is called right after the ffmpeg
+    subprocess is spawned — lets a caller (e.g. the batch converter) keep
+    a handle to terminate() it for pause/skip/delete on an in-flight job.
     Raises RuntimeError if ffmpeg isn't available."""
     if shutil.which("ffmpeg") is None and not os.path.exists(FFMPEG_PATH):
         raise RuntimeError(
@@ -248,9 +253,12 @@ def ffmpeg_convert(input_files, output_file, ffmpeg_args=None, on_progress=None)
     cmd = [FFMPEG_PATH, "-y"] + sum([["-i", f] for f in input_files], []) + ffmpeg_args + [output_file]
 
     process = subprocess.Popen(cmd, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
+    if on_process_start:
+        on_process_start(process)
 
     duration_pattern = re.compile(r"Duration: (\d+):(\d+):(\d+\.\d+)")
     time_pattern = re.compile(r"time=(\d+):(\d+):(\d+\.\d+)")
+    speed_pattern = re.compile(r"speed=\s*([\d.]+)x")
     duration_seconds = None
 
     for line in process.stderr:
@@ -268,6 +276,12 @@ def ffmpeg_convert(input_files, output_file, ffmpeg_args=None, on_progress=None)
             percent = min(100, (current / duration_seconds) * 100)
             if on_progress:
                 on_progress(percent)
+        sm = speed_pattern.search(line)
+        if sm and on_speed:
+            try:
+                on_speed(float(sm.group(1)))
+            except ValueError:
+                pass
     process.wait()
     if process.returncode != 0:
         raise RuntimeError(f"ffmpeg exited with code {process.returncode}")
@@ -278,16 +292,18 @@ def ffmpeg_convert(input_files, output_file, ffmpeg_args=None, on_progress=None)
 # ---------------------------------------------------------------
 
 def _make_progress_hook(on_chunk_percent, weight, base):
-    """yt-dlp progress_hook -> overall job percent.
+    """yt-dlp progress_hook -> overall job percent, plus raw download speed
+    (bytes/sec) and ETA (seconds) straight from yt-dlp's own tracker.
     weight = how much of the total job (0-100) this download phase covers.
-    base   = where this phase starts on the overall scale."""
+    base   = where this phase starts on the overall scale.
+    on_chunk_percent(percent, speed_bytes_sec, eta_seconds) — caller decides
+    how/whether to persist speed+eta (only one DB write per tick)."""
     def hook(d):
         if d.get("status") == "downloading":
             total = d.get("total_bytes") or d.get("total_bytes_estimate")
             downloaded = d.get("downloaded_bytes", 0)
-            if total:
-                phase_pct = (downloaded / total) * 100
-                on_chunk_percent(base + (phase_pct / 100) * weight)
+            pct = base + ((downloaded / total) * 100 / 100) * weight if total else base
+            on_chunk_percent(pct, d.get("speed"), d.get("eta"))
     return hook
 
 
@@ -358,8 +374,12 @@ def process_job(job_id: str, worker_name: str = "worker"):
     folder = ensure_group_folder(job)
     fmt = job["format"].upper()
 
-    def on_progress(percent):
-        q.set_progress(job_id, round(min(percent, 99), 1))
+    def on_progress(percent, speed_bytes_sec=None, eta_seconds=None):
+        q.set_progress(job_id, round(min(percent, 99), 1),
+                        speed_bytes_sec=speed_bytes_sec, eta_seconds=eta_seconds)
+
+    def on_conv_speed(speed_x):
+        q.set_conversion_speed(job_id, speed_x)
 
     temp_files = []
     try:
@@ -380,6 +400,7 @@ def process_job(job_id: str, worker_name: str = "worker"):
                 temp_files, output_path,
                 ["-c:a", "libmp3lame", "-b:a", bitrate],
                 on_progress=lambda p: on_progress(99),
+                on_speed=on_conv_speed,
             )
 
         elif fmt == "3GP":
@@ -390,6 +411,7 @@ def process_job(job_id: str, worker_name: str = "worker"):
                 temp_files, output_path,
                 ["-s", resolution, "-c:v", "mpeg4", "-b:v", video_bitrate, "-c:a", "aac", "-ac", "1"],
                 on_progress=lambda p: on_progress(99),
+                on_speed=on_conv_speed,
             )
 
         else:  # MP4
@@ -399,6 +421,7 @@ def process_job(job_id: str, worker_name: str = "worker"):
                 temp_files, output_path,
                 ["-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k"],
                 on_progress=lambda p: on_progress(99),
+                on_speed=on_conv_speed,
             )
 
         for f in temp_files:

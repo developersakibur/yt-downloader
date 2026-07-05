@@ -34,6 +34,10 @@
           <span class="stat-num" id="stat-failed-n">0</span>
           <span class="stat-lbl">failed</span>
         </div>
+        <div class="stat-chip stat-chip--speed hidden" id="stat-speed">
+          <span class="stat-num" id="stat-speed-n">0 MB/s</span>
+          <span class="stat-lbl">↓ speed</span>
+        </div>
       </div>
 
       <div class="header-right">
@@ -89,7 +93,7 @@
         <div class="field hidden" id="qty-row">
           <label class="field-label">How many videos</label>
           <div class="qty-control">
-            <input type="number" id="qty-input" min="1" max="100" value="25" />
+            <input type="number" id="qty-input" min="1" max="250" value="25" />
             <label class="qty-all-toggle">
               <input type="checkbox" id="qty-all-toggle">
               <span id="qty-all-label">All</span>
@@ -104,6 +108,7 @@
             <label class="seg-opt"><input type="radio" name="playlist" value="false" checked><span>This video only</span></label>
             <label class="seg-opt"><input type="radio" name="playlist" value="true"><span>Whole playlist</span></label>
           </div>
+          <div class="qty-hint" id="scope-count-hint"></div>
         </div>
 
         <button class="btn-primary" id="download-btn" disabled>
