@@ -380,7 +380,8 @@ body {
   transition: width 0.4s ease;
 }
 .job-card[data-status="completed"] .progress-fill { background: var(--green); }
-.job-card[data-status="converting"] .progress-fill { background: var(--yellow); }
+.progress-track.converting { background: color-mix(in srgb, var(--yellow) 30%, var(--surface2)); }
+.progress-track.converting .progress-fill { background: var(--green); }
 
 /* Action buttons */
 .job-actions {

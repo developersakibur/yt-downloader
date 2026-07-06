@@ -93,6 +93,7 @@ def _migrate(conn):
         "ALTER TABLE video_jobs ADD COLUMN conversion_speed_x REAL",
         "ALTER TABLE local_conversion_jobs ADD COLUMN conversion_speed_x REAL",
         "ALTER TABLE pending_previews ADD COLUMN scan_status TEXT NOT NULL DEFAULT 'complete'",
+        "ALTER TABLE video_jobs ADD COLUMN convert_percent REAL",
     ]
     _migrate_local_conversion_status(conn)
 
@@ -322,6 +323,17 @@ def set_conversion_speed(job_id, speed_x):
         cur.execute(
             "UPDATE video_jobs SET conversion_speed_x = ?, updated_at = ? WHERE id = ?",
             (speed_x, _now(), job_id),
+        )
+
+
+def set_convert_percent(job_id, percent):
+    """Real ffmpeg encode progress (0-100), separate from the download's
+    progress_percent — lets the UI show the convert phase as its own
+    independent bar instead of a frozen ~99% while conversion runs."""
+    with cursor(write=True) as cur:
+        cur.execute(
+            "UPDATE video_jobs SET convert_percent = ?, updated_at = ? WHERE id = ?",
+            (percent, _now(), job_id),
         )
 
 

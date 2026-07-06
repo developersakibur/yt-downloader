@@ -132,12 +132,29 @@ async function loadCurrentTab() {
     showView("form", [qtyRow]);
   } else if (type === "video+list") {
     scopeCountHint.textContent = "Checking playlist size…";
-    showView("form", [scopeRow]);
+    showView("form", [scopeRow]); // updateScopeQtyVisibility() adds qtyRow too if "Whole playlist" is already checked
+    updateScopeQtyVisibility();
     fetchScopeCount(url);
   } else {
     showView("form");
   }
 }
+
+// Same behavior as web/app.js — quantity selector only shows once
+// "Whole playlist" is actually chosen, and configureQtyRow() resets any
+// stale disabled/checked state left over from a previous URL.
+function updateScopeQtyVisibility() {
+  const wholePlaylist = document.querySelector("input[name='playlist']:checked")?.value === "true";
+  if (wholePlaylist) {
+    qtyRow.classList.remove("hidden");
+    configureQtyRow("playlist");
+  } else {
+    qtyRow.classList.add("hidden");
+  }
+}
+document.querySelectorAll("input[name='playlist']").forEach(radio => {
+  radio.addEventListener("change", updateScopeQtyVisibility);
+});
 
 async function fetchScopeCount(url) {
   try {

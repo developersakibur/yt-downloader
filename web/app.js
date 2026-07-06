@@ -181,9 +181,27 @@ function updateFormUI() {
     scopeRow.classList.remove("hidden");
     scopeCountHint.textContent = "Checking playlist size…";
     scopeCountTimer = setTimeout(() => fetchScopeCount(url), 400); // debounce typing
+    updateScopeQtyVisibility();
   }
 }
 urlInput.addEventListener("input", updateFormUI);
+
+// video+list URLs only show the quantity selector once "Whole playlist"
+// is actually chosen — and configureQtyRow() resets it fresh every time,
+// so a stale disabled input / stuck "All" checkbox from a previous
+// playlist/search scan (before the input got hidden) can't leak through.
+function updateScopeQtyVisibility() {
+  const wholePlaylist = document.querySelector("input[name='playlist']:checked")?.value === "true";
+  if (wholePlaylist) {
+    qtyRow.classList.remove("hidden");
+    configureQtyRow("playlist");
+  } else {
+    qtyRow.classList.add("hidden");
+  }
+}
+document.querySelectorAll("input[name='playlist']").forEach(radio => {
+  radio.addEventListener("change", updateScopeQtyVisibility);
+});
 
 let scopeCountTimer = null;
 async function fetchScopeCount(url) {
@@ -693,21 +711,90 @@ function actionButtons(job) {
   return btns.join("");
 }
 
-function jobCardHTML(job) {
-  const pct      = job.status === "completed" ? 100 : Math.round(job.progress_percent || 0);
-  const title    = job.original_title || job.video_id || job.url;
+function _jobMetaHTML(job, pct) {
   const uploader = job.uploader ? `· ${esc(job.uploader)}` : "";
   const dur      = job.duration ? formatDuration(job.duration) : "";
   const cookieBadge = job.used_cookies ? `<span title="Used cookies">🔐</span>` : "";
   const retryBadge  = job.retry_count > 0 ? `<span>retry #${job.retry_count}</span>` : "";
   const idxBadge    = job.playlist_index != null ? `<span>#${job.playlist_index}</span>` : "";
-  const error    = job.error_message ? `<div class="job-error">${esc(job.error_message.slice(0,200))}</div>` : "";
   const speedBadge = job.status === "downloading" && job.speed_bytes_sec
     ? `<span class="job-speed">↓ ${fmtSpeed(job.speed_bytes_sec)}${job.eta_seconds ? " · " + fmtEta(job.eta_seconds) : ""}</span>`
     : "";
   const convSpeedBadge = job.status === "converting" && job.conversion_speed_x
     ? `<span class="job-speed">⚙ ${job.conversion_speed_x.toFixed(1)}x</span>`
     : "";
+  return [
+    job.format + (job.quality && job.quality !== "best" ? ` · ${job.quality}` : ""),
+    uploader, dur, idxBadge, retryBadge, cookieBadge, speedBadge, convSpeedBadge,
+    (pct > 0 && pct < 100) ? `${pct}%` : ""
+  ].filter(Boolean).map(x => `<span>${x}</span>`).join("");
+}
+
+// Updates each existing job card's dynamic bits (progress bar, speed/eta
+// text, status badge, action buttons) directly on the DOM nodes already
+// there, instead of rebuilding the list — used when the job set itself
+// hasn't changed between polls, only percentages/speeds ticking.
+// Returns false (caller should fall back to a full rebuild) if any
+// expected card is missing from the DOM.
+function patchJobCards(jobs) {
+  for (const job of jobs) {
+    const card = queueList.querySelector(`.job-card[data-id="${job.id}"]`);
+    if (!card) return false;
+
+    if (card.dataset.status !== job.status) card.dataset.status = job.status;
+
+    const isConverting = job.status === "converting";
+    const pct = job.status === "completed" ? 100
+      : isConverting ? Math.round(job.convert_percent || 0)
+      : Math.round(job.progress_percent || 0);
+
+    const track = card.querySelector(".progress-track");
+    if (track) {
+      track.classList.toggle("converting", isConverting);
+      const fill = track.querySelector(".progress-fill");
+      if (fill) fill.style.width = pct + "%";
+    }
+
+    const badge = card.querySelector(".job-header-right .badge");
+    if (badge) {
+      badge.textContent = job.status;
+      badge.className = `badge ${badgeClass(job.status)}`;
+    }
+
+    const metaEl = card.querySelector(".job-meta");
+    if (metaEl) metaEl.innerHTML = _jobMetaHTML(job, pct);
+
+    const actionsEl = card.querySelector(".job-actions");
+    if (actionsEl) {
+      const newActionsHtml = actionButtons(job);
+      if (actionsEl.innerHTML !== newActionsHtml) {
+        actionsEl.innerHTML = newActionsHtml;
+        attachActions(actionsEl); // re-bind listeners for the buttons we just replaced
+      }
+    }
+
+    const existingError = card.querySelector(".job-error");
+    if (job.error_message) {
+      const errorHtml = esc(job.error_message.slice(0, 200));
+      if (existingError) {
+        if (existingError.innerHTML !== errorHtml) existingError.innerHTML = errorHtml;
+      } else {
+        card.querySelector(".job-card-body").insertAdjacentHTML("beforeend", `<div class="job-error">${errorHtml}</div>`);
+      }
+    } else if (existingError) {
+      existingError.remove();
+    }
+  }
+  return true;
+}
+
+function jobCardHTML(job) {
+  const isConverting = job.status === "converting";
+  const pct = job.status === "completed" ? 100
+    : isConverting ? Math.round(job.convert_percent || 0)
+    : Math.round(job.progress_percent || 0);
+  const title    = job.original_title || job.video_id || job.url;
+  const error    = job.error_message ? `<div class="job-error">${esc(job.error_message.slice(0,200))}</div>` : "";
   const thumb    = job.video_id
     ? `<img class="job-thumb" src="${API}/thumbnails/${job.video_id}.jpg" loading="lazy" onerror="this.style.display='none'">`
     : `<div class="job-thumb-placeholder"></div>`;
@@ -723,20 +810,10 @@ function jobCardHTML(job) {
             </div>
           </div>
           <div class="job-meta-row">
-            <div class="job-meta">${[
-              job.format + (job.quality && job.quality !== "best" ? ` · ${job.quality}` : ""),
-              uploader,
-              dur,
-              idxBadge,
-              retryBadge,
-              cookieBadge,
-              speedBadge,
-              convSpeedBadge,
-              (pct > 0 && pct < 100) ? `${pct}%` : ""
-            ].filter(Boolean).map(x => `<span>${x}</span>`).join("")}</div>
+            <div class="job-meta">${_jobMetaHTML(job, pct)}</div>
             <div class="job-actions">${actionButtons(job)}</div>
           </div>
-          <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
+          <div class="progress-track ${isConverting ? "converting" : ""}"><div class="progress-fill" style="width:${pct}%"></div></div>
           ${error}
         </div>
       </div>
@@ -782,6 +859,7 @@ function groupActionBar(groupId, jobs) {
 
 // ── Queue rendering ───────────────────────────────────────────
 let lastQueueHTML = "";
+let lastQueueJobIds = "";
 
 async function fetchQueue() {
   try {
@@ -812,8 +890,21 @@ async function fetchQueue() {
     if (!jobs.length) {
       const html = `<div class="empty-state"><div class="empty-icon">✓</div><p>Queue is empty.<br>All done! Check History for completed downloads.</p></div>`;
       if (lastQueueHTML !== html) { queueList.innerHTML = html; lastQueueHTML = html; }
+      lastQueueJobIds = "";
       return;
     }
+
+    // Cheap path: same set of job ids as last render (in the same order)
+    // -> just patch each card's dynamic bits in place (progress, speed,
+    // badge, action buttons) instead of rebuilding the whole list.
+    // Rebuilding via innerHTML on every 2s poll — even though nothing
+    // structural changed, just percentages ticking — was resetting
+    // scroll position and losing hover/focus state on every tick.
+    const currentIds = jobs.map(j => j.id).join(",");
+    if (currentIds === lastQueueJobIds && patchJobCards(jobs)) {
+      return;
+    }
+    lastQueueJobIds = currentIds;
 
     const html = groupToggle.dataset.active === "true" ? renderGroupView(jobs) : renderFlatView(jobs);
     if (html !== lastQueueHTML) {
@@ -927,6 +1018,7 @@ groupToggle.addEventListener("click", () => {
   groupToggle.dataset.active = (!active).toString();
   groupToggle.classList.toggle("active", !active);
   lastQueueHTML = "";
+  lastQueueJobIds = "";
   fetchQueue();
 });
 

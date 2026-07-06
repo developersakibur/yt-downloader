@@ -381,6 +381,9 @@ def process_job(job_id: str, worker_name: str = "worker"):
     def on_conv_speed(speed_x):
         q.set_conversion_speed(job_id, speed_x)
 
+    def on_conv_progress(percent):
+        q.set_convert_percent(job_id, round(percent, 1))
+
     temp_files = []
     try:
         streams, used_cookies = ck.call_with_cookie_fallback(
@@ -399,7 +402,7 @@ def process_job(job_id: str, worker_name: str = "worker"):
             ffmpeg_convert(
                 temp_files, output_path,
                 ["-c:a", "libmp3lame", "-b:a", bitrate],
-                on_progress=lambda p: on_progress(99),
+                on_progress=on_conv_progress,
                 on_speed=on_conv_speed,
             )
 
@@ -410,7 +413,7 @@ def process_job(job_id: str, worker_name: str = "worker"):
             ffmpeg_convert(
                 temp_files, output_path,
                 ["-s", resolution, "-c:v", "mpeg4", "-b:v", video_bitrate, "-c:a", "aac", "-ac", "1"],
-                on_progress=lambda p: on_progress(99),
+                on_progress=on_conv_progress,
                 on_speed=on_conv_speed,
             )
 
@@ -420,7 +423,7 @@ def process_job(job_id: str, worker_name: str = "worker"):
             ffmpeg_convert(
                 temp_files, output_path,
                 ["-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-b:a", "192k"],
-                on_progress=lambda p: on_progress(99),
+                on_progress=on_conv_progress,
                 on_speed=on_conv_speed,
             )
 

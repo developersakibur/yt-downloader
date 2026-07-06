@@ -80,7 +80,7 @@ def mark_downloading(job_id):
 
 
 def mark_converting(job_id):
-    db.update_job(job_id, status="converting")
+    db.update_job(job_id, status="converting", convert_percent=0)
 
 
 def mark_completed(job_id, file_path):
@@ -99,6 +99,10 @@ def set_progress(job_id, percent, speed_bytes_sec=None, eta_seconds=None):
 
 def set_conversion_speed(job_id, speed_x):
     db.set_conversion_speed(job_id, speed_x)
+
+
+def set_convert_percent(job_id, percent):
+    db.set_convert_percent(job_id, percent)
 
 
 def get_total_download_speed():
