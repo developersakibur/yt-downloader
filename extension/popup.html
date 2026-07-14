@@ -3,25 +3,35 @@
 <head>
   <meta charset="utf-8">
   <title>YT Downloader v7</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <div id="container">
 
     <header class="topbar">
-      <div class="brand-icon">▼</div>
       <div class="brand">
+        <div class="brand-icon">Y</div>
         <span class="brand-name">YT Downloader</span>
         <span class="brand-ver">v7</span>
       </div>
       <span id="server-pill" class="pill pill-checking">checking…</span>
-      <button id="theme-btn" class="btn-icon" title="Toggle theme">◑</button>
+      <button id="theme-btn" class="btn-icon" title="Toggle theme" type="button"></button>
     </header>
 
     <div class="quick-row">
-      <button id="dashboard-btn" class="btn btn-ghost">📊 Dashboard</button>
-      <button id="sync-btn" class="btn btn-ghost btn-grow">🔐 Sync Cookies</button>
-      <button id="del-cookies-btn" class="btn btn-icon-sm" title="Remove saved cookies">🗑</button>
+      <button id="dashboard-btn" class="btn btn-ghost" type="button">
+        <svg class="ico" viewBox="0 0 24 24"><path d="M14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7zM5 5h5V3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2v-5h-2v5H5V5z" fill="currentColor"/></svg>
+        Dashboard
+      </button>
+      <button id="sync-btn" class="btn btn-ghost btn-grow" type="button">
+        <svg class="ico" viewBox="0 0 24 24"><path d="M12 1a5 5 0 00-5 5v3H6a2 2 0 00-2 2v9a2 2 0 002 2h12a2 2 0 002-2v-9a2 2 0 00-2-2h-1V6a5 5 0 00-5-5zm-3 8V6a3 3 0 016 0v3H9z" fill="currentColor"/></svg>
+        Sync Cookies
+      </button>
+      <button id="del-cookies-btn" class="btn-icon-sm" title="Remove saved cookies" type="button">
+        <svg class="ico" viewBox="0 0 24 24"><path d="M6 19a2 2 0 002 2h8a2 2 0 002-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" fill="currentColor"/></svg>
+      </button>
     </div>
     <div id="cookie-status" class="status-line"></div>
 
@@ -87,7 +97,10 @@
       </div>
 
       <button id="download-btn" class="btn btn-primary btn-block">
-        <span id="dl-label">⬇ Download</span>
+        <span id="dl-label">
+          <svg class="ico" viewBox="0 0 24 24"><path d="M12 3a1 1 0 011 1v8.59l2.3-2.3a1 1 0 111.4 1.42l-4 4a1 1 0 01-1.4 0l-4-4a1 1 0 111.4-1.42l2.3 2.3V4a1 1 0 011-1zM5 21a1 1 0 010-2h14a1 1 0 010 2H5z" fill="currentColor"/></svg>
+          Download
+        </span>
         <span id="dl-spinner" class="hidden">scanning…</span>
       </button>
 

@@ -5,3 +5,6 @@ requests
 psutil
 tqdm
 static-ffmpeg
+
+# dev/test only
+pytest

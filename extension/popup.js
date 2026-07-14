@@ -37,9 +37,14 @@ const views = {
 };
 
 // ── Theme ─────────────────────────────────────────────────────
+const ICON_MOON  = `<svg class="ico" viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 119.5 4 6.8 6.8 0 0020 14.5z" fill="currentColor"/></svg>`;
+const ICON_SUN   = `<svg class="ico" viewBox="0 0 24 24"><path d="M6.76 4.84L4.96 3.05 3.55 4.46l1.79 1.79 1.42-1.41zM4 10.5H1v2h3v-2zm9-9.95h-2V3.5h2V.55zm7.45 3.91l-1.41-1.41-1.79 1.79 1.41 1.41 1.79-1.79zM17.24 19.16l1.79 1.8 1.41-1.41-1.8-1.79-1.4 1.4zM20 10.5v2h3v-2h-3zM12 5.5a6 6 0 100 12 6 6 0 000-12zM11 22.45h2V19.5h-2v2.95zm-7.45-3.91l1.41 1.41 1.79-1.8-1.41-1.41-1.79 1.8z" fill="currentColor"/></svg>`;
+const ICON_CHECK = `<svg class="ico" viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm-1.2 14.6l-4-4 1.4-1.42 2.6 2.6 5.6-5.6 1.4 1.42-7 7z" fill="currentColor"/></svg>`;
+const ICON_ERR   = `<svg class="ico" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z" fill="currentColor"/></svg>`;
+const ICON_TRASH = `<svg class="ico" viewBox="0 0 24 24"><path d="M6 19a2 2 0 002 2h8a2 2 0 002-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" fill="currentColor"/></svg>`;
 function applyTheme(t) {
   document.documentElement.setAttribute("data-theme", t);
-  themeBtn.textContent = t === "dark" ? "◑" : "◐";
+  themeBtn.innerHTML = t === "dark" ? ICON_MOON : ICON_SUN;
   localStorage.setItem("v7_ext_theme", t);
 }
 applyTheme(localStorage.getItem("v7_ext_theme") || "dark");
@@ -89,6 +94,12 @@ function configureQtyRow(type) {
     if (parseInt(qtyInput.value || "0") > 250) qtyInput.value = 250;
     qtyAllToggle.parentElement.classList.add("hidden");
     qtyHint.textContent = "Search results — max 250";
+  } else if (type === "mix") {
+    qtyInput.min = 1;
+    qtyInput.max = 100;
+    if (parseInt(qtyInput.value || "0") > 100 || !qtyInput.value) qtyInput.value = 25;
+    qtyAllToggle.parentElement.classList.add("hidden"); // no "All" concept for an auto-generated Mix
+    qtyHint.textContent = "This is a YouTube Mix/Radio — no fixed length, pick how many (max 100).";
   } else {
     qtyInput.min = 1;
     qtyInput.removeAttribute("max");
@@ -105,6 +116,11 @@ qtyAllToggle.addEventListener("change", () => {
 function detectUrlType(url) {
   if (!/youtube\.com/i.test(url)) return null;
   if (/youtube\.com\/results/.test(url))             return "search";
+  // A Mix/Radio's list= id always starts with RD — checked before the
+  // ordinary video+list branch since it overrides it (mirrors
+  // scanner.py's _mix_list_id()).
+  const listMatch = url.match(/[?&]list=([^&]+)/);
+  if (listMatch && /^RD/i.test(listMatch[1]))         return "mix";
   if (/watch\?v=.*list=|list=.*watch\?v=/.test(url)) return "video+list";
   if (/watch\?v=|youtu\.be\//.test(url))             return "video";
   if (/\/shorts\//.test(url))                         return "short";
@@ -127,7 +143,7 @@ async function loadCurrentTab() {
     showView("unsupported"); return;
   }
 
-  if (type === "search" || type === "playlist" || type === "channel") {
+  if (type === "search" || type === "playlist" || type === "channel" || type === "mix") {
     configureQtyRow(type);
     showView("form", [qtyRow]);
   } else if (type === "video+list") {
@@ -220,12 +236,12 @@ async function syncCookies() {
       body: JSON.stringify({ cookies }),
     });
     if (res.ok) {
-      setStatus(cookieStatus, `✓ ${cookies.length} cookies synced — private/age-restricted videos will work.`, "ok");
+      setStatus(cookieStatus, `${cookies.length} cookies synced — private/age-restricted videos will work.`, "ok", ICON_CHECK);
     } else {
-      setStatus(cookieStatus, "❌ Server couldn't save cookies.", "err");
+      setStatus(cookieStatus, "Server couldn't save cookies.", "err", ICON_ERR);
     }
   } catch (e) {
-    setStatus(cookieStatus, "❌ Could not read or send cookies.", "err");
+    setStatus(cookieStatus, "Could not read or send cookies.", "err", ICON_ERR);
   }
 }
 
@@ -233,9 +249,9 @@ async function deleteCookies() {
   setStatus(cookieStatus, "Removing cookies…", "");
   try {
     const res = await fetch(`${API}/api/cookies`, { method: "DELETE" });
-    setStatus(cookieStatus, res.ok ? "🗑 Cookies removed." : "❌ Could not remove cookies.", res.ok ? "" : "err");
+    setStatus(cookieStatus, res.ok ? "Cookies removed." : "Could not remove cookies.", res.ok ? "" : "err", res.ok ? ICON_TRASH : ICON_ERR);
   } catch {
-    setStatus(cookieStatus, "❌ Could not reach server.", "err");
+    setStatus(cookieStatus, "Could not reach server.", "err", ICON_ERR);
   }
 }
 
@@ -251,8 +267,8 @@ function resetDownloadBtn() {
   dlSpinner.classList.add("hidden");
 }
 
-function setStatus(el, msg, cls = "") {
-  el.textContent = msg;
+function setStatus(el, msg, cls = "", icon = "") {
+  el.innerHTML = icon ? `${icon} ${msg}` : msg;
   el.className = "status-line" + (cls ? ` ${cls}` : "");
 }
 
@@ -302,7 +318,7 @@ downloadBtn.addEventListener("click", async () => {
   dlSpinner.classList.remove("hidden");
 
   const type = detectUrlType(url);
-  const isGroup = type === "search" || type === "playlist" || type === "channel" ||
+  const isGroup = type === "search" || type === "playlist" || type === "channel" || type === "mix" ||
     (type === "video+list" && document.querySelector("input[name='playlist']:checked")?.value === "true");
 
   const format  = document.querySelector("input[name='format']:checked")?.value || "MP4";
@@ -322,7 +338,7 @@ downloadBtn.addEventListener("click", async () => {
       if (!data.ok) throw new Error(data.error || "scan rejected");
       pollPreviewScan(data.scan_id);
     } catch (e) {
-      setStatus(dlStatus, `❌ ${e.message}`, "err");
+      setStatus(dlStatus, e.message, "err", ICON_ERR);
       resetDownloadBtn();
     }
     return;
@@ -339,7 +355,7 @@ downloadBtn.addEventListener("click", async () => {
     if (!data.ok) throw new Error(data.error || "scan rejected");
     pollScan(data.scan_id);
   } catch (e) {
-    setStatus(dlStatus, `❌ ${e.message}`, "err");
+    setStatus(dlStatus, e.message, "err", ICON_ERR);
     resetDownloadBtn();
   }
 });
@@ -359,12 +375,12 @@ function pollPreviewScan(scanId, attempt = 0) {
       if (d.status === "done") {
         const n = d.result.video_count;
         setStatus(dlStatus,
-          `✓ Found ${n} video${n !== 1 ? "s" : ""} — open Dashboard → Approve tab to review and start.`, "ok");
+          `Found ${n} video${n !== 1 ? "s" : ""} — open Dashboard → Approve tab to review and start.`, "ok", ICON_CHECK);
       } else {
-        setStatus(dlStatus, `❌ ${d.error || "Scan failed."}`, "err");
+        setStatus(dlStatus, d.error || "Scan failed.", "err", ICON_ERR);
       }
     } catch {
-      setStatus(dlStatus, "❌ Lost connection to server.", "err");
+      setStatus(dlStatus, "Lost connection to server.", "err", ICON_ERR);
     }
     resetDownloadBtn();
   }, 800);
@@ -372,7 +388,7 @@ function pollPreviewScan(scanId, attempt = 0) {
 
 function pollScan(scanId, attempt = 0) {
   if (attempt > 60) {           // 60 × 800ms = 48s timeout
-    setStatus(dlStatus, "❌ Scan timed out.", "err");
+    setStatus(dlStatus, "Scan timed out.", "err", ICON_ERR);
     resetDownloadBtn();
     return;
   }
@@ -390,12 +406,12 @@ function pollScan(scanId, attempt = 0) {
       if (d.status === "done") {
         const n = d.result.video_count;
         setStatus(dlStatus,
-          `✓ ${n} video${n !== 1 ? "s" : ""} added to queue — open Dashboard to track progress.`, "ok");
+          `${n} video${n !== 1 ? "s" : ""} added to queue — open Dashboard to track progress.`, "ok", ICON_CHECK);
       } else {
-        setStatus(dlStatus, `❌ ${d.error || "Scan failed."}`, "err");
+        setStatus(dlStatus, d.error || "Scan failed.", "err", ICON_ERR);
       }
     } catch {
-      setStatus(dlStatus, "❌ Lost connection to server.", "err");
+      setStatus(dlStatus, "Lost connection to server.", "err", ICON_ERR);
     }
     resetDownloadBtn();
   }, 800);

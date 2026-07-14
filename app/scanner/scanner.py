@@ -79,7 +79,7 @@ class _ProgressLogger:
 # ---------------------------------------------------------------
 
 VALID_TYPES = (
-    "single", "short", "playlist", "search",
+    "single", "short", "playlist", "mix", "search",
     "channel-longs", "channel-shorts", "channel-full",
 )
 
@@ -90,12 +90,33 @@ def is_valid_youtube_url(url: str) -> bool:
     return bool(re.search(r"(youtube\.com|youtu\.be)", url.strip(), re.IGNORECASE))
 
 
+def _mix_list_id(url: str) -> str | None:
+    """YouTube's auto-generated 'Mix'/'Radio' playlists always carry a
+    list= id starting with RD (e.g. list=RD4YPaFrWf9OM, or
+    list=RDCLAK5uy_... for a search-based mix). Unlike a real playlist,
+    these have no fixed length — YouTube keeps generating more entries
+    algorithmically, so the usual 'this playlist has N videos' count and
+    'All' scope are both meaningless here. Returns the list id if this
+    is a mix, else None."""
+    m = re.search(r"[?&]list=([^&]+)", url)
+    if not m:
+        return None
+    list_id = m.group(1)
+    return list_id if list_id.upper().startswith("RD") else None
+
+
 def detect_type(url: str, force_playlist: bool = False) -> str:
     """Classify a raw URL into one of VALID_TYPES, or 'unknown'."""
     url = url.strip()
 
     if "youtube.com/results" in url:
         return "search"
+    # Checked before the ordinary watch?v=+list=/playlist branches below,
+    # and independent of force_playlist — a Mix is never a normal
+    # single-video-with-list or a normal playlist, no matter how the
+    # person's scope toggle was set.
+    if _mix_list_id(url):
+        return "mix"
     if (("watch?v=" in url) or ("youtu.be/" in url)) and "list=" in url:
         return "playlist" if force_playlist else "single"
     if "watch?v=" in url or "youtu.be/" in url:
@@ -130,6 +151,7 @@ def build_extract_url(url: str, url_type: str, quantity: int = 25) -> str:
 def _group_name_for(url_type: str) -> str:
     return {
         "playlist": "Playlist",
+        "mix": "Mix",
         "search": "Search",
         "channel-longs": "Channel",
         "channel-shorts": "Channel Shorts",
@@ -193,7 +215,7 @@ def _extract_flat(extract_url: str, ydl_opts: dict, quantity: int | None = 100, 
 _CHUNK_SIZE = 100
 
 
-def _extract_flat_chunked(extract_url: str, ydl_opts: dict, max_total: int, on_progress=None):
+def _extract_flat_chunked(extract_url: str, ydl_opts: dict, max_total: int, on_progress=None, on_chunk=None):
     """Works around a known, still-open yt-dlp/YouTube bug where a single
     flat-playlist extraction call silently stops around 100-200 items on
     longer playlists/channels — YouTube's continuation token stops
@@ -207,12 +229,27 @@ def _extract_flat_chunked(extract_url: str, ydl_opts: dict, max_total: int, on_p
     where YouTube's pagination breaks. Stitches the chunks into one
     combined result.
 
+    on_chunk(chunk_entries, playlist_count), if given, is called
+    synchronously right after EACH chunk is fetched — before the next
+    chunk's network call even starts. This lets the caller (scan_preview)
+    process/emit those ~100 videos one at a time immediately, instead of
+    waiting for every chunk of a big playlist/channel to finish listing
+    first. That's the difference between the Approve tab going quiet for
+    the whole scan and then dumping everything at once, vs. videos
+    trickling in as they're actually found.
+
+    playlist_count is yt-dlp's reported total for this listing (may be
+    None, and — notably for auto-generated Mix/Radio lists — may be
+    wildly unreliable). If on_chunk returns False, chunk-fetching stops
+    immediately (used as an overscan safety net: see scan_preview).
+
     max_total caps the absolute number fetched (safety net for search's
     250 cap and playlist/channel's 999 cap on 'All')."""
     from yt_dlp import YoutubeDL
     all_entries = []
     playlist_count = None
     group_title = None
+    stopped_early = False
     start = 1
     while start <= max_total:
         end = min(start + _CHUNK_SIZE - 1, max_total)
@@ -238,6 +275,10 @@ def _extract_flat_chunked(extract_url: str, ydl_opts: dict, max_total: int, on_p
         all_entries.extend(chunk_entries)
         if on_progress:
             on_progress(len(all_entries), playlist_count or max_total)
+        if on_chunk:
+            if on_chunk(chunk_entries, playlist_count) is False:
+                stopped_early = True
+                break  # caller decided this has gone far enough (overscan guard)
 
         requested_size = end - start + 1
         if len(chunk_entries) < requested_size:
@@ -247,7 +288,8 @@ def _extract_flat_chunked(extract_url: str, ydl_opts: dict, max_total: int, on_p
 
         start = end + 1
 
-    return {"entries": all_entries, "title": group_title, "playlist_count": playlist_count}
+    return {"entries": all_entries, "title": group_title, "playlist_count": playlist_count,
+            "stopped_early": stopped_early}
 
 
 def _extract_full(url: str, ydl_opts: dict):
@@ -264,7 +306,7 @@ def _extract_full(url: str, ydl_opts: dict):
         return ydl.extract_info(url, download=False)
 
 
-def probe(extract_url: str, flat: bool, quantity: int | None = 100, on_progress=None, prefer_cookies=False):
+def probe(extract_url: str, flat: bool, quantity: int | None = 100, on_progress=None, prefer_cookies=False, on_chunk=None):
     """No-cookies-first probing, retried once with cookies on a login/age/
     bot-detection style failure (Cookie Priority rule) — UNLESS
     prefer_cookies=True, which sends cookies from the first attempt.
@@ -272,10 +314,12 @@ def probe(extract_url: str, flat: bool, quantity: int | None = 100, on_progress=
     YouTube silently truncates long anonymous listings without raising
     any error for the normal retry path to catch.
     quantity=None (flat mode only) is treated as 'no explicit cap' —
-    max_total falls back to a safety ceiling (see scan_preview)."""
+    max_total falls back to a safety ceiling (see scan_preview).
+    on_chunk, if given (flat mode only), is forwarded to
+    _extract_flat_chunked — see its docstring."""
     if flat:
         max_total = quantity if quantity is not None else 999
-        fn = lambda ydl_opts: _extract_flat_chunked(extract_url, ydl_opts, max_total, on_progress=on_progress)
+        fn = lambda ydl_opts: _extract_flat_chunked(extract_url, ydl_opts, max_total, on_progress=on_progress, on_chunk=on_chunk)
         info, used_cookies = ck.call_with_cookie_fallback(fn, ydl_opts={}, prefer_cookies=prefer_cookies)
     else:
         info, used_cookies = ck.call_with_cookie_fallback(_extract_full, extract_url, ydl_opts={})
@@ -333,16 +377,19 @@ def scan_preview(url: str, quantity: int | str = 25, force_playlist: bool = Fals
     url_type = detect_type(url, force_playlist=force_playlist)
     if url_type == "unknown":
         raise ValueError(f"Could not recognize URL type: {url}")
-    if url_type not in ("playlist", "search", "channel-longs", "channel-shorts", "channel-full"):
+    if url_type not in ("playlist", "mix", "search", "channel-longs", "channel-shorts", "channel-full"):
         raise ValueError("scan_preview is only for playlist/search/channel URLs")
 
     # Caps: search results are an endless feed, so "All" still means
     # "up to 250" rather than truly unlimited. Playlists/channels are
     # finite, so "All" means "as many as actually exist, up to a 999
     # safety ceiling" (nobody's queuing 1000 videos from one playlist by
-    # accident).
+    # accident). Mix/Radio lists are neither — they're algorithmically
+    # generated with no real end, so even "All" is capped tight (100);
+    # there's no such thing as "the whole mix".
     SEARCH_MAX = 250
     GROUP_MAX = 999
+    MIX_MAX = 100
 
     quantity_for_extract = None
     if url_type == "search":
@@ -351,6 +398,12 @@ def scan_preview(url: str, quantity: int | str = 25, force_playlist: bool = Fals
         except (TypeError, ValueError):
             q = 25
         quantity_for_extract = max(1, min(q, SEARCH_MAX))
+    elif url_type == "mix":
+        try:
+            q = int(quantity)
+        except (TypeError, ValueError):
+            q = 25  # also covers quantity="all" — a Mix has no "all"
+        quantity_for_extract = max(1, min(q, MIX_MAX))
     else:
         if isinstance(quantity, str) and quantity.strip().lower() == "all":
             quantity_for_extract = GROUP_MAX
@@ -371,37 +424,62 @@ def scan_preview(url: str, quantity: int | str = 25, force_playlist: bool = Fals
     prefer_cookies = url_type != "search"
 
     extract_url = build_extract_url(url, url_type, quantity_for_extract)
-    info, used_cookies = probe(extract_url, flat=True, quantity=quantity_for_extract,
-                                on_progress=on_progress, prefer_cookies=prefer_cookies)
 
-    entries = [e for e in (info.get("entries") or []) if e]
-    group_name = info.get("title") or info.get("uploader") or info.get("channel") or _group_name_for(url_type)
+    # General overscan safety net (not just for Mix): yt-dlp's reported
+    # playlist_count is sometimes stale or just wrong (Mix/Radio lists are
+    # the extreme case, but any listing can be off). If the number of
+    # videos actually found runs far past what was reported up front,
+    # stop listing instead of silently walking all the way to the hard
+    # cap — the person gets what was found so far plus a clear signal
+    # that something didn't match expectations, rather than a surprise
+    # 600-video scan.
+    OVERSCAN_FACTOR = 3
+    OVERSCAN_MIN_ESTIMATE = 10  # ignore tiny/placeholder estimates
 
     preview_entries = []
-    for idx, entry in enumerate(entries, start=1):
-        video_id = entry.get("id")
-        video_url = entry.get("url") or (f"https://youtu.be/{video_id}" if video_id else None)
-        if not video_url:
-            continue
-        thumb_url = entry.get("thumbnail") or _best_thumbnail(entry.get("thumbnails"))
-        thumb_path = download_thumbnail(video_id, thumb_url) if video_id and thumb_url else None
+    _idx = {"n": 0}  # running counter across chunks (closures can't rebind an int directly)
 
-        preview_entry = {
-            "video_id": video_id,
-            "url": video_url,
-            "title": entry.get("title"),
-            "thumbnail_path": thumb_path,
-            "duration": entry.get("duration"),
-            "uploader": entry.get("uploader") or entry.get("channel"),
-            "playlist_index": idx,
-        }
-        preview_entries.append(preview_entry)
-        if on_entries:
-            on_entries([preview_entry])
-        if on_progress:
-            on_progress(idx, len(entries))  # thumbnail-fetch phase, same counter
-        if on_progress:
-            on_progress(idx, len(entries))  # thumbnail-fetch phase, same counter
+    def _process_chunk(chunk_entries, playlist_count):
+        """Called by probe()/_extract_flat_chunked as soon as each ~100-item
+        chunk is listed — turns those entries into preview rows (thumbnail
+        + DB-already-downloaded check) and emits them ONE AT A TIME via
+        on_entries, right away. This is what makes videos trickle into the
+        Approve tab as they're found instead of only appearing once the
+        entire playlist/channel has finished listing. Returns False to
+        signal the overscan safety net tripped (see above)."""
+        for entry in chunk_entries:
+            video_id = entry.get("id")
+            video_url = entry.get("url") or (f"https://youtu.be/{video_id}" if video_id else None)
+            if not video_url:
+                continue
+            _idx["n"] += 1
+            thumb_url = entry.get("thumbnail") or _best_thumbnail(entry.get("thumbnails"))
+            thumb_path = download_thumbnail(video_id, thumb_url) if video_id and thumb_url else None
+
+            preview_entry = {
+                "video_id": video_id,
+                "url": video_url,
+                "title": entry.get("title"),
+                "thumbnail_path": thumb_path,
+                "duration": entry.get("duration"),
+                "uploader": entry.get("uploader") or entry.get("channel"),
+                "playlist_index": _idx["n"],
+                "already_downloaded": db.is_video_already_downloaded(video_id),
+            }
+            preview_entries.append(preview_entry)
+            if on_entries:
+                on_entries([preview_entry])  # one video, right now — not batched
+
+        if playlist_count and playlist_count >= OVERSCAN_MIN_ESTIMATE:
+            if _idx["n"] > playlist_count * OVERSCAN_FACTOR:
+                return False  # tell _extract_flat_chunked to stop fetching more chunks
+        return True
+
+    info, used_cookies = probe(extract_url, flat=True, quantity=quantity_for_extract,
+                                on_progress=on_progress, prefer_cookies=prefer_cookies,
+                                on_chunk=_process_chunk)
+
+    group_name = info.get("title") or info.get("uploader") or info.get("channel") or _group_name_for(url_type)
 
     return {
         "type": url_type,
@@ -409,6 +487,7 @@ def scan_preview(url: str, quantity: int | str = 25, force_playlist: bool = Fals
         "source_url": url,
         "entries": preview_entries,
         "used_cookies": used_cookies,
+        "stopped_early": info.get("stopped_early", False),
     }
 
 
@@ -424,15 +503,21 @@ def confirm_batch(source_url: str, url_type: str, group_name: str,
     the "add number prefix" toggle is on; omitted/None means no prefix
     for that job."""
 
-    if url_type not in ("playlist", "search", "channel-longs", "channel-shorts", "channel-full"):
+    if url_type not in ("playlist", "mix", "search", "channel-longs", "channel-shorts", "channel-full"):
         raise ValueError("confirm_batch is only for playlist/search/channel URLs")
     if not entries:
         raise ValueError("No videos selected")
 
     format = (format or "MP4").upper()
 
+    # groups.type has a DB-level CHECK constraint that doesn't include "mix"
+    # (a YouTube Radio/auto-mix playlist, e.g. list=RD...) — it's stored as
+    # "playlist" since it behaves identically for grouping/storage purposes.
+    # The friendlier "Mix" label still comes through via _group_name_for().
+    db_type = "playlist" if url_type == "mix" else url_type
+
     group_id = db.create_group(
-        type_=url_type,
+        type_=db_type,
         name=group_name or _group_name_for(url_type),
         source_url=source_url,
         total_videos=len(entries),
@@ -480,7 +565,7 @@ def scan(url: str, quantity: int | str = 25, force_playlist: bool = False,
     if url_type == "unknown":
         raise ValueError(f"Could not recognize URL type: {url}")
 
-    is_group_type = url_type in ("playlist", "search", "channel-longs", "channel-shorts", "channel-full")
+    is_group_type = url_type in ("playlist", "mix", "search", "channel-longs", "channel-shorts", "channel-full")
 
     # Quantity normalization — server-side, independent of what the client
     # sent, so a stale/tampered request can never bypass these rules:
@@ -520,7 +605,7 @@ def scan(url: str, quantity: int | str = 25, force_playlist: bool = False,
         entries = [e for e in (info.get("entries") or []) if e]  # drop unavailable (None) entries
         group_name = info.get("title") or info.get("uploader") or info.get("channel") or _group_name_for(url_type)
         group_id = db.create_group(
-            type_=url_type,
+            type_="playlist" if url_type == "mix" else url_type,
             name=group_name,
             source_url=url,
             total_videos=len(entries),

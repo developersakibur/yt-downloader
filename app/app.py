@@ -64,6 +64,9 @@ def resize_worker_pool(new_count):
 def start_app():
     db.init_db()
     started = _pool.start()
+    worker.start_retry_sweeper()
+    from logging_setup import get_logger
+    get_logger("app").info(f"Database ready. {started} download worker(s) started.")
     print(f"✅ Database ready. {started} download worker(s) started.")
 
 

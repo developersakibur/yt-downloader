@@ -19,6 +19,7 @@ a job into an invalid state by accident.
 
 import os
 import sys
+from datetime import datetime, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "database"))
 import database as db  # noqa: E402
@@ -131,14 +132,63 @@ def resume_job(job_id):
     return db.get_job(job_id)
 
 
+def pause_all():
+    """Pause every currently active/queued job in one go. Best-effort —
+    a job that finishes/fails in the split second between listing and
+    pausing it is just skipped (InvalidTransition), not an error."""
+    paused = 0
+    for job in db.list_jobs(status=["queued", "downloading", "converting"]):
+        try:
+            pause_job(job["id"])
+            paused += 1
+        except InvalidTransition:
+            pass
+    return paused
+
+
+def resume_all():
+    """Resume every currently paused job."""
+    resumed = 0
+    for job in db.list_jobs(status=["paused"]):
+        try:
+            resume_job(job["id"])
+            resumed += 1
+        except InvalidTransition:
+            pass
+    return resumed
+
+
 def retry_job(job_id):
     job = _job_or_raise(job_id)
     _guard(job, "retry")
     db.update_job(
         job_id, status="queued", progress_percent=0, error_message=None,
         locked_by=None, locked_at=None, retry_count=job["retry_count"] + 1,
+        next_retry_at=None,
     )
     return db.get_job(job_id)
+
+
+MAX_AUTO_RETRIES = 3
+BACKOFF_SCHEDULE_SECONDS = [5, 30, 120]  # attempt 1, 2, 3 — then give up automatically
+
+
+def schedule_retry(job_id, error_message):
+    """Called by worker.py when a job fails with a retryable error and
+    hasn't exhausted its auto-retry budget. Stays 'failed' (so it's
+    still visible + manually retryable/deletable) but with next_retry_at
+    set — the retry-sweep loop in worker.py picks it up once that time
+    passes and calls retry_job() automatically. Returns the delay used,
+    or None if the auto-retry budget is already exhausted (caller should
+    fall back to a normal permanent failure)."""
+    job = db.get_job(job_id)
+    if job is None or job["retry_count"] >= MAX_AUTO_RETRIES:
+        return None
+    delay = BACKOFF_SCHEDULE_SECONDS[min(job["retry_count"], len(BACKOFF_SCHEDULE_SECONDS) - 1)]
+    next_at = (datetime.now() + timedelta(seconds=delay)).strftime("%Y-%m-%d %H:%M:%S")
+    db.update_job(job_id, status="failed", error_message=str(error_message),
+                  locked_by=None, locked_at=None, next_retry_at=next_at)
+    return delay
 
 
 def skip_job(job_id):

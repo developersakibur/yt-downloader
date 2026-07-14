@@ -4,175 +4,226 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>YT Downloader v7</title>
-  <link rel="stylesheet" href="style.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/base.css" />
+  <link rel="stylesheet" href="css/components.css" />
+  <link rel="stylesheet" href="css/widgets.css" />
+  <link rel="stylesheet" href="css/responsive.css" />
 </head>
 <body>
 
-  <!-- HEADER -->
-  <header class="header">
-    <div class="header-inner">
-      <div class="brand">
-        <div class="brand-icon">▼</div>
-        <span class="brand-name">YT Downloader</span>
-        <span class="brand-ver">v7</span>
-      </div>
+  <!-- TOP BAR: brand + live stats + theme -->
+  <header class="topbar">
+    <button class="rail-toggle" id="rail-toggle" aria-label="Toggle menu">
+      <span></span><span></span><span></span>
+    </button>
 
-      <div class="live-stats">
-        <div class="stat-chip" id="stat-queued">
-          <span class="stat-num" id="stat-queued-n">0</span>
-          <span class="stat-lbl">queued</span>
-        </div>
-        <div class="stat-chip stat-chip--active" id="stat-downloading">
-          <span class="stat-num" id="stat-downloading-n">0</span>
-          <span class="stat-lbl">downloading</span>
-        </div>
-        <div class="stat-chip stat-chip--done" id="stat-completed">
-          <span class="stat-num" id="stat-completed-n">0</span>
-          <span class="stat-lbl">done</span>
-        </div>
-        <div class="stat-chip stat-chip--fail" id="stat-failed">
-          <span class="stat-num" id="stat-failed-n">0</span>
-          <span class="stat-lbl">failed</span>
-        </div>
-        <div class="stat-chip stat-chip--speed hidden" id="stat-speed">
-          <span class="stat-num" id="stat-speed-n">0 MB/s</span>
-          <span class="stat-lbl">↓ speed</span>
-        </div>
-      </div>
+    <div class="brand">
+      <div class="brand-icon">Y</div>
+      <span class="brand-name">YT Downloader</span>
+      <span class="brand-ver">v7</span>
+    </div>
 
-      <div class="header-right">
-        <span class="server-pill" id="server-pill">● online</span>
-        <button class="btn-icon" id="theme-btn" title="Toggle theme">◑</button>
+    <div class="live-stats">
+      <div class="stat-chip" id="stat-queued">
+        <span class="stat-num" id="stat-queued-n">0</span>
+        <span class="stat-lbl">queued</span>
       </div>
+      <div class="stat-chip stat-chip--active" id="stat-downloading">
+        <span class="stat-num" id="stat-downloading-n">0</span>
+        <span class="stat-lbl">downloading</span>
+      </div>
+      <div class="stat-chip stat-chip--done" id="stat-completed">
+        <span class="stat-num" id="stat-completed-n">0</span>
+        <span class="stat-lbl">done</span>
+      </div>
+      <div class="stat-chip stat-chip--fail" id="stat-failed">
+        <span class="stat-num" id="stat-failed-n">0</span>
+        <span class="stat-lbl">failed</span>
+      </div>
+      <div class="stat-chip stat-chip--speed hidden" id="stat-speed">
+        <span class="stat-num" id="stat-speed-n">0 MB/s</span>
+        <span class="stat-lbl">↓ speed</span>
+      </div>
+    </div>
+
+    <div class="header-right">
+      <span class="server-pill" id="server-pill">online</span>
+      <button class="btn-icon" id="theme-btn" title="Toggle theme" type="button"><svg class="ico" viewBox="0 0 24 24"><path d="M20 14.5A8.5 8.5 0 119.5 4 6.8 6.8 0 0020 14.5z" fill="currentColor"/></svg></button>
     </div>
   </header>
 
-  <div class="layout">
+  <div class="shell">
 
-    <!-- SIDEBAR: new download form -->
-    <aside class="sidebar">
+    <!-- ICON RAIL: primary navigation (desktop: left rail, mobile: bottom bar) -->
+    <nav class="tab-bar" id="tab-bar">
+      <button class="tab active" data-tab="queue" title="Queue">
+        <svg viewBox="0 0 24 24" class="tab-ico"><path d="M12 3a1 1 0 011 1v8.59l2.3-2.3a1 1 0 111.4 1.42l-4 4a1 1 0 01-1.4 0l-4-4a1 1 0 111.4-1.42l2.3 2.3V4a1 1 0 011-1zM5 21a1 1 0 010-2h14a1 1 0 010 2H5z" fill="currentColor"/></svg>
+        <span>Queue</span>
+      </button>
+      <button class="tab" data-tab="approve" title="Approve">
+        <svg viewBox="0 0 24 24" class="tab-ico"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm-1.2 14.6l-4-4 1.4-1.42 2.6 2.6 5.6-5.6 1.4 1.42-7 7z" fill="currentColor"/></svg>
+        <span>Approve</span>
+        <span class="tab-badge hidden" id="approve-badge"></span>
+      </button>
+      <button class="tab" data-tab="history" title="History">
+        <svg viewBox="0 0 24 24" class="tab-ico"><path d="M13 3a9 9 0 00-9 9H1l3.89 3.89.07.14L9 12H6a7 7 0 117 7 6.9 6.9 0 01-4.95-2.05l-1.42 1.42A9 9 0 1013 3zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8z" fill="currentColor"/></svg>
+        <span>History</span>
+      </button>
+      <button class="tab" data-tab="convert" title="Convert">
+        <svg viewBox="0 0 24 24" class="tab-ico"><path d="M6.99 11L3 15l3.99 4v-3H14v-2H6.99v-3zM21 9l-3.99-4v3H10v2h7.01v3L21 9z" fill="currentColor"/></svg>
+        <span>Convert</span>
+      </button>
+      <button class="tab" data-tab="settings" title="Settings">
+        <svg viewBox="0 0 24 24" class="tab-ico"><path d="M19.14 12.94a7.14 7.14 0 000-1.88l2.03-1.58a.5.5 0 00.12-.64l-1.92-3.32a.5.5 0 00-.6-.22l-2.39.96a7.03 7.03 0 00-1.63-.94l-.36-2.54a.5.5 0 00-.5-.42h-3.84a.5.5 0 00-.5.42l-.36 2.54c-.59.24-1.13.56-1.63.94l-2.39-.96a.5.5 0 00-.6.22L2.71 8.84a.5.5 0 00.12.64l2.03 1.58a7.14 7.14 0 000 1.88l-2.03 1.58a.5.5 0 00-.12.64l1.92 3.32a.5.5 0 00.6.22l2.39-.96c.5.38 1.04.7 1.63.94l.36 2.54a.5.5 0 00.5.42h3.84a.5.5 0 00.5-.42l.36-2.54c.59-.24 1.13-.56 1.63-.94l2.39.96a.5.5 0 00.6-.22l1.92-3.32a.5.5 0 00-.12-.64l-2.03-1.58zM12 15.5A3.5 3.5 0 1112 8.5a3.5 3.5 0 010 7z" fill="currentColor"/></svg>
+        <span>Settings</span>
+      </button>
+      <button class="tab" data-tab="logs" title="Logs">
+        <svg viewBox="0 0 24 24" class="tab-ico"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-1-5V3.5L18.5 9H15z" fill="currentColor"/></svg>
+        <span>Logs</span>
+      </button>
 
-      <div class="cookie-bar" id="cookie-bar">
-        <span id="cookie-icon">🔓</span>
-        <span id="cookie-text">Cookies not synced</span>
-        <button class="btn-text" id="cookie-clear-btn" style="display:none">Remove</button>
+      <button class="rail-btn tab--new" id="new-download-toggle" title="New download" type="button">
+        <svg viewBox="0 0 24 24" class="tab-ico"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6z" fill="currentColor"/></svg>
+        <span>New</span>
+      </button>
+    </nav>
+
+    <!-- BACKDROP for mobile drawer -->
+    <div class="drawer-backdrop" id="drawer-backdrop"></div>
+
+    <!-- SIDEBAR: new download form + batch convert (slide-over drawer on smaller screens) -->
+    <aside class="sidebar" id="sidebar">
+
+      <div class="sidebar-scroll">
+
+        <div class="cookie-bar" id="cookie-bar">
+          <span id="cookie-icon"><svg class="ico" viewBox="0 0 24 24"><path d="M18 8h-1V6a5 5 0 00-9.9-1h2.1a3 3 0 015.8 1v2H6a2 2 0 00-2 2v9a2 2 0 002 2h12a2 2 0 002-2v-9a2 2 0 00-2-2z" fill="currentColor"/></svg></span>
+          <span id="cookie-text">Cookies not synced</span>
+          <button class="btn-text" id="cookie-clear-btn" style="display:none">Remove</button>
+        </div>
+
+        <section class="form-card">
+          <h2 class="form-title">New download</h2>
+
+          <div class="field">
+            <input class="url-input" id="url-input" type="text"
+              placeholder="Paste a YouTube link — video, shorts, playlist, search, channel" />
+            <div class="url-hint" id="url-hint"></div>
+          </div>
+
+          <div class="field">
+            <label class="field-label">Format</label>
+            <div class="seg" id="format-seg">
+              <label class="seg-opt">
+                <input type="radio" name="format" value="MP4" checked>
+                <span>MP4</span>
+              </label>
+              <label class="seg-opt">
+                <input type="radio" name="format" value="MP3">
+                <span>MP3</span>
+              </label>
+              <label class="seg-opt">
+                <input type="radio" name="format" value="3GP">
+                <span>3GP</span>
+              </label>
+            </div>
+          </div>
+
+          <div class="field">
+            <label class="field-label">Quality</label>
+            <select class="quality-select" id="quality-select"></select>
+          </div>
+
+          <div class="field hidden" id="qty-row">
+            <label class="field-label">How many videos</label>
+            <div class="qty-control">
+              <input type="number" id="qty-input" min="1" max="250" value="25" />
+              <label class="qty-all-toggle">
+                <input type="checkbox" id="qty-all-toggle">
+                <span id="qty-all-label">All</span>
+              </label>
+            </div>
+            <div class="qty-hint" id="qty-hint"></div>
+          </div>
+
+          <div class="field hidden" id="scope-row">
+            <label class="field-label">Download scope</label>
+            <div class="seg">
+              <label class="seg-opt"><input type="radio" name="playlist" value="false" checked><span>This video only</span></label>
+              <label class="seg-opt"><input type="radio" name="playlist" value="true"><span>Whole playlist</span></label>
+            </div>
+            <div class="qty-hint" id="scope-count-hint"></div>
+          </div>
+
+          <button class="btn-primary" id="download-btn" disabled>
+            <span id="download-btn-label">Download</span>
+            <span class="scan-spinner hidden" id="scan-spinner">scanning…</span>
+          </button>
+        </section>
+
+        <section class="form-card converter-card">
+          <h2 class="form-title">Batch convert (local files)</h2>
+
+          <div class="field">
+            <label class="field-label">Folder path</label>
+            <input class="path-text-input" id="convert-path-input" type="text"
+              placeholder="Paste a folder path, e.g. D:\Videos" />
+          </div>
+
+          <div class="field">
+            <label class="field-label">Convert</label>
+            <select class="quality-select" id="convert-target-select">
+              <option value="MP3">Any video → MP3</option>
+              <option value="3GP">Any video → 3GP</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label class="field-label">Quality</label>
+            <select class="quality-select" id="convert-quality-select"></select>
+          </div>
+
+          <div class="field">
+            <label class="checkbox-row">
+              <input type="checkbox" id="convert-recursive">
+              <span>Include subfolders</span>
+            </label>
+          </div>
+
+          <div class="field">
+            <label class="field-label">Simultaneous conversions</label>
+            <select class="quality-select" id="convert-concurrency-select">
+              <option value="1">1 (lightest on CPU)</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+              <option value="4">4 (fastest, heaviest on CPU)</option>
+            </select>
+          </div>
+
+          <button class="btn-primary" id="convert-btn">
+            <span id="convert-btn-label">Convert</span>
+            <span class="scan-spinner hidden" id="convert-spinner">starting…</span>
+          </button>
+          <div class="convert-hint" id="convert-hint"></div>
+        </section>
+
       </div>
-
-      <section class="form-card">
-        <h2 class="form-title">New download</h2>
-
-        <div class="field">
-          <input class="url-input" id="url-input" type="text"
-            placeholder="Paste a YouTube link — video, shorts, playlist, search, channel" />
-          <div class="url-hint" id="url-hint"></div>
-        </div>
-
-        <div class="field">
-          <label class="field-label">Format</label>
-          <div class="seg" id="format-seg">
-            <label class="seg-opt">
-              <input type="radio" name="format" value="MP4" checked>
-              <span>MP4 <small>video</small></span>
-            </label>
-            <label class="seg-opt">
-              <input type="radio" name="format" value="MP3">
-              <span>MP3 <small>audio</small></span>
-            </label>
-            <label class="seg-opt">
-              <input type="radio" name="format" value="3GP">
-              <span>3GP <small>mobile</small></span>
-            </label>
-          </div>
-        </div>
-
-        <div class="field">
-          <label class="field-label">Quality</label>
-          <select class="quality-select" id="quality-select"></select>
-        </div>
-
-        <div class="field hidden" id="qty-row">
-          <label class="field-label">How many videos</label>
-          <div class="qty-control">
-            <input type="number" id="qty-input" min="1" max="250" value="25" />
-            <label class="qty-all-toggle">
-              <input type="checkbox" id="qty-all-toggle">
-              <span id="qty-all-label">All</span>
-            </label>
-          </div>
-          <div class="qty-hint" id="qty-hint"></div>
-        </div>
-
-        <div class="field hidden" id="scope-row">
-          <label class="field-label">Download scope</label>
-          <div class="seg">
-            <label class="seg-opt"><input type="radio" name="playlist" value="false" checked><span>This video only</span></label>
-            <label class="seg-opt"><input type="radio" name="playlist" value="true"><span>Whole playlist</span></label>
-          </div>
-          <div class="qty-hint" id="scope-count-hint"></div>
-        </div>
-
-        <button class="btn-primary" id="download-btn" disabled>
-          <span id="download-btn-label">Download</span>
-          <span class="scan-spinner hidden" id="scan-spinner">scanning…</span>
-        </button>
-      </section>
-
-      <section class="form-card converter-card">
-        <h2 class="form-title">Batch convert (local files)</h2>
-
-        <div class="field">
-          <label class="field-label">Folder path</label>
-          <input class="path-text-input" id="convert-path-input" type="text"
-            placeholder="Paste a folder path, e.g. D:\Videos" />
-        </div>
-
-        <div class="field">
-          <label class="field-label">Convert</label>
-          <select class="quality-select" id="convert-target-select">
-            <option value="MP3">Any video → MP3</option>
-            <option value="3GP">Any video → 3GP</option>
-          </select>
-        </div>
-
-        <div class="field">
-          <label class="field-label">Quality</label>
-          <select class="quality-select" id="convert-quality-select"></select>
-        </div>
-
-        <div class="field">
-          <label class="checkbox-row">
-            <input type="checkbox" id="convert-recursive">
-            <span>Include subfolders</span>
-          </label>
-        </div>
-
-        <button class="btn-primary" id="convert-btn">
-          <span id="convert-btn-label">Convert</span>
-          <span class="scan-spinner hidden" id="convert-spinner">starting…</span>
-        </button>
-        <div class="convert-hint" id="convert-hint"></div>
-      </section>
-
     </aside>
 
-    <!-- MAIN: tabs -->
+    <!-- MAIN CONTENT -->
     <main class="main">
-
-      <nav class="tab-bar">
-        <button class="tab active" data-tab="queue">Queue</button>
-        <button class="tab" data-tab="approve">Approve <span class="tab-badge hidden" id="approve-badge"></span></button>
-        <button class="tab" data-tab="history">History</button>
-        <button class="tab" data-tab="convert">Convert</button>
-        <button class="tab" data-tab="settings">Settings</button>
-      </nav>
 
       <!-- QUEUE TAB -->
       <div class="tab-panel active" id="tab-queue">
         <div class="panel-head">
           <span class="panel-count" id="job-count">0 jobs</span>
           <div class="panel-actions">
+            <button class="toggle-btn" id="pause-all-btn" title="Pause every active/queued download"><svg class="ico" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1" fill="currentColor"/><rect x="14" y="4" width="4" height="16" rx="1" fill="currentColor"/></svg> Pause all</button>
+            <button class="toggle-btn" id="resume-all-btn" title="Resume every paused download"><svg class="ico" viewBox="0 0 24 24"><path d="M7 4l14 8-14 8V4z" fill="currentColor"/></svg> Resume all</button>
             <button class="toggle-btn" id="group-view-toggle" data-active="false" title="Group by playlist/channel">
-              ☰ Group view
+              <svg class="ico" viewBox="0 0 24 24"><path d="M4 6h16v2H4V6zm0 5h16v2H4v-2zm0 5h16v2H4v-2z" fill="currentColor"/></svg> Group view
             </button>
           </div>
         </div>
@@ -184,7 +235,7 @@
         </div>
       </div>
 
-      <!-- APPROVE TAB (pending previews — from this app or the extension) -->
+      <!-- APPROVE TAB -->
       <div class="tab-panel" id="tab-approve">
         <div class="panel-head">
           <span class="panel-count" id="approve-count">Nothing pending</span>
@@ -197,8 +248,21 @@
         <div class="panel-head">
           <span class="panel-count" id="history-count">0 items</span>
           <div class="panel-actions">
+            <input type="text" id="history-search" class="history-search-input" placeholder="Search title/uploader/playlist…">
+            <select id="history-status-filter" class="history-filter-select">
+              <option value="">All statuses</option>
+              <option value="completed">Completed</option>
+              <option value="failed">Failed</option>
+              <option value="cancelled">Cancelled</option>
+            </select>
+            <select id="history-format-filter" class="history-filter-select">
+              <option value="">All formats</option>
+              <option value="MP4">MP4</option>
+              <option value="MP3">MP3</option>
+              <option value="3GP">3GP</option>
+            </select>
             <button class="toggle-btn" id="history-group-toggle" data-active="false" title="Group by playlist/channel">
-              ☰ Group view
+              <svg class="ico" viewBox="0 0 24 24"><path d="M4 6h16v2H4V6zm0 5h16v2H4v-2zm0 5h16v2H4v-2z" fill="currentColor"/></svg> Group view
             </button>
           </div>
         </div>
@@ -218,7 +282,7 @@
         <div id="convert-list" class="job-list">
           <div class="empty-state">
             <div class="empty-icon">🔄</div>
-            <p>No conversions yet.<br>Use the "Batch convert" form on the left.</p>
+            <p>No conversions yet.<br>Use the "Batch convert" form (tap “New” to open it).</p>
           </div>
         </div>
       </div>
@@ -245,6 +309,15 @@
               </select>
             </div>
             <div class="setting-row">
+              <label>Batch converter — default simultaneous conversions</label>
+              <select id="setting-converter-concurrency">
+                <option value="1">1</option>
+                <option value="2" selected>2</option>
+                <option value="3">3</option>
+                <option value="4">4</option>
+              </select>
+            </div>
+            <div class="setting-row">
               <label>Default format</label>
               <select id="setting-format">
                 <option value="MP4">MP4</option>
@@ -252,8 +325,12 @@
                 <option value="3GP">3GP</option>
               </select>
             </div>
+            <div class="setting-row">
+              <label>Downloads folder <span class="settings-note-inline">(leave empty to use your Windows Downloads folder)</span></label>
+              <input type="text" id="setting-downloads-folder" class="path-text-input" placeholder="e.g. D:\YT Downloads">
+            </div>
             <button class="btn-save" id="save-settings-btn">Save settings</button>
-            <span class="save-feedback hidden" id="save-feedback">✓ Saved</span>
+            <span class="save-feedback hidden" id="save-feedback"><svg class="ico" viewBox="0 0 24 24"><path d="M12 2a10 10 0 100 20 10 10 0 000-20zm-1.2 14.6l-4-4 1.4-1.42 2.6 2.6 5.6-5.6 1.4 1.42-7 7z" fill="currentColor"/></svg> Saved</span>
           </div>
 
           <div class="settings-card">
@@ -269,9 +346,30 @@
         </div>
       </div>
 
+      <!-- LOGS TAB -->
+      <div class="tab-panel" id="tab-logs">
+        <div class="panel-head">
+          <span class="panel-count" id="logs-count">Loading…</span>
+          <div class="panel-actions">
+            <button class="btn-toolbar" id="logs-refresh-btn" type="button">
+              <svg class="ico" viewBox="0 0 24 24"><path d="M17.65 6.35A7.96 7.96 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" fill="currentColor"/></svg> Refresh
+            </button>
+            <button class="btn-toolbar" id="logs-copy-btn" type="button">
+              <svg class="ico" viewBox="0 0 24 24"><path d="M16 1H4a2 2 0 00-2 2v14h2V3h12V1zm3 4H8a2 2 0 00-2 2v14a2 2 0 002 2h11a2 2 0 002-2V7a2 2 0 00-2-2zm0 16H8V7h11v14z" fill="currentColor"/></svg> Copy
+            </button>
+            <button class="btn-danger-ghost" id="logs-clear-btn" type="button">
+              <svg class="ico" viewBox="0 0 24 24"><path d="M6 19a2 2 0 002 2h8a2 2 0 002-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" fill="currentColor"/></svg> Clear
+            </button>
+          </div>
+        </div>
+        <pre id="logs-view" class="logs-view">Loading…</pre>
+      </div>
+
     </main>
   </div>
 
-  <script src="app.js"></script>
+  <script type="module" src="modules/main.js"></script>
+  <script type="module" src="modules/ui.js"></script>
+  <script type="module" src="modules/custom-select.js"></script>
 </body>
 </html>

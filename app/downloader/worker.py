@@ -27,9 +27,14 @@ warnings.filterwarnings("ignore")
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(_THIS_DIR), "database"))
 sys.path.insert(0, os.path.join(os.path.dirname(_THIS_DIR), "cookies"))
+sys.path.insert(0, os.path.dirname(_THIS_DIR))
 import database as db   # noqa: E402
+from errors import clean_error_text  # noqa: E402
 import cookies as ck    # noqa: E402
 import job_queue as q        # noqa: E402
+from logging_setup import get_logger  # noqa: E402
+
+log = get_logger("worker")
 
 BASE_DIR = os.path.dirname(os.path.dirname(_THIS_DIR))
 
@@ -38,8 +43,11 @@ def _windows_downloads_folder():
     """Resolve the real Windows 'Downloads' folder for the current user,
     respecting the case where they've relocated it (e.g. to another
     drive) via the Known Folder API — falls back to the standard
-    ~/Downloads path if that lookup isn't available (non-Windows, or
-    the API call fails for any reason)."""
+    ~/Downloads path if that lookup isn't available (non-Windows, the
+    API call fails, or it returns something that doesn't look like a
+    real Downloads folder)."""
+    fallback = os.path.join(os.path.expanduser("~"), "Downloads")
+
     if sys.platform == "win32":
         try:
             import ctypes
@@ -48,25 +56,54 @@ def _windows_downloads_folder():
             FOLDERID_Downloads = "{374DE290-123F-4565-9164-39C4925E467B}"
             guid = ctypes.create_unicode_buffer(FOLDERID_Downloads)
             buf = ctypes.c_wchar_p()
-            # SHGetKnownFolderPath wants a GUID struct, not a string — build one
+
             class GUID(ctypes.Structure):
                 _fields_ = [("Data1", wintypes.DWORD), ("Data2", wintypes.WORD),
                             ("Data3", wintypes.WORD), ("Data4", ctypes.c_byte * 8)]
 
             rfid = GUID()
-            ctypes.windll.ole32.CLSIDFromString(guid, ctypes.byref(rfid))
-            ctypes.windll.shell32.SHGetKnownFolderPath(
+            hr1 = ctypes.windll.ole32.CLSIDFromString(guid, ctypes.byref(rfid))
+            if hr1 != 0:
+                log.warning(f"CLSIDFromString failed (hr={hr1:#x}); using ~/Downloads")
+                return fallback
+
+            hr2 = ctypes.windll.shell32.SHGetKnownFolderPath(
                 ctypes.byref(rfid), 0, 0, ctypes.byref(buf)
             )
-            if buf.value:
-                return buf.value
-        except Exception:
-            pass  # fall through to the simple default below
+            try:
+                if hr2 != 0 or not buf.value:
+                    log.warning(f"SHGetKnownFolderPath failed (hr={hr2:#x}); using ~/Downloads")
+                    return fallback
 
-    return os.path.join(os.path.expanduser("~"), "Downloads")
+                resolved = buf.value
+                # Sanity check: a real Downloads folder is never the bare
+                # profile root or a drive root — reject anything that looks
+                # like that instead of quietly writing into it later.
+                home = os.path.expanduser("~")
+                if os.path.normcase(os.path.normpath(resolved)) in (
+                    os.path.normcase(os.path.normpath(home)),
+                    os.path.normcase(os.path.splitdrive(resolved)[0] + "\\"),
+                ):
+                    log.warning(
+                        f"SHGetKnownFolderPath returned a suspicious path "
+                        f"({resolved!r}); using ~/Downloads instead"
+                    )
+                    return fallback
+
+                return resolved
+            finally:
+                # buf.value was allocated by SHGetKnownFolderPath via
+                # CoTaskMemAlloc — free it so we don't leak on every call.
+                if buf:
+                    ctypes.windll.ole32.CoTaskMemFree(buf)
+        except Exception:
+            log.exception("Windows Downloads-folder lookup failed; using ~/Downloads")
+
+    return fallback
 
 
 _DEFAULT_DOWNLOADS = os.path.join(_windows_downloads_folder(), "YT Downloader")
+log.info(f"Downloads root resolved to: {_DEFAULT_DOWNLOADS}")
 
 
 def set_hidden(path: str):
@@ -434,18 +471,95 @@ def process_job(job_id: str, worker_name: str = "worker"):
         q.mark_completed(job_id, output_path)
 
     except Exception as e:
-        for f in temp_files:
-            if os.path.exists(f):
-                try:
-                    os.remove(f)
-                except OSError:
-                    pass
-        q.mark_failed(job_id, str(e))
+        retryable = _is_retryable_error(e)
+        err_text = clean_error_text(e)
+        delay = q.schedule_retry(job_id, err_text) if retryable else None
+
+        if delay is not None:
+            # Transient error, auto-retry budget not exhausted — leave
+            # temp_files ON DISK. yt-dlp defaults to continuedl=True, so
+            # the next attempt (same job_id -> same temp filename) picks
+            # up from the existing .part file instead of starting the
+            # download over from zero.
+            log.warning(f"job {job_id} failed (retryable), auto-retry in {delay}s: {e}")
+        else:
+            # Either a permanent error, or a transient one that's used up
+            # its auto-retry attempts — no point keeping partial files
+            # around indefinitely, and a manual retry starts fresh anyway.
+            _cleanup_temp_files(temp_files)
+            log.exception(f"job {job_id} failed ({job.get('url')})")
+            q.mark_failed(job_id, err_text)
 
 
 # ---------------------------------------------------------------
 # WORKER POOL
 # ---------------------------------------------------------------
+
+# ---------------------------------------------------------------
+# RETRY CLASSIFICATION — which failures are worth an automatic retry
+# ---------------------------------------------------------------
+
+# Substrings matched against str(exception), case-insensitive. These are
+# transient/network-ish conditions where trying again shortly (with
+# backoff) has a real chance of succeeding.
+_RETRYABLE_PATTERNS = (
+    "timed out", "timeout", "connection reset", "connection aborted",
+    "connection refused", "temporary failure", "urlopen error",
+    "network is unreachable", "http error 429", "http error 500",
+    "http error 502", "http error 503", "http error 504",
+    "unable to download webpage", "remote end closed connection",
+    "read timed out", "ssl", "econnreset",
+)
+
+# Substrings for conditions where retrying is pointless — the video
+# genuinely isn't downloadable, no amount of waiting fixes it.
+_PERMANENT_PATTERNS = (
+    "private video", "video unavailable", "this video is not available",
+    "video has been removed", "account associated with this video",
+    "copyright", "sign in to confirm your age", "age-restricted",
+    "this live event", "members-only", "no video formats found",
+)
+
+
+def _is_retryable_error(exc) -> bool:
+    msg = str(exc).lower()
+    if any(p in msg for p in _PERMANENT_PATTERNS):
+        return False
+    return any(p in msg for p in _RETRYABLE_PATTERNS)
+
+
+def _cleanup_temp_files(temp_files):
+    for f in temp_files:
+        if os.path.exists(f):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+
+
+# ---------------------------------------------------------------
+# AUTO-RETRY SWEEP — separate from the WorkerPool: just watches for
+# failed jobs whose backoff timer has elapsed and requeues them. The
+# WorkerPool's own claim loop picks them up normally from there.
+# ---------------------------------------------------------------
+
+def _retry_sweep_loop():
+    while True:
+        try:
+            for job in db.get_jobs_due_for_retry():
+                try:
+                    q.retry_job(job["id"])
+                    log.info(f"auto-retrying job {job['id']} (attempt {job['retry_count'] + 1})")
+                except Exception:
+                    log.exception(f"could not auto-retry job {job['id']}")
+        except Exception:
+            log.exception("retry sweep loop error")
+        time.sleep(5)
+
+
+def start_retry_sweeper():
+    threading.Thread(target=_retry_sweep_loop, daemon=True).start()
+
 
 class WorkerPool:
     """Spawns N daemon threads, each in a loop: claim a queued job, run
@@ -472,7 +586,8 @@ class WorkerPool:
             try:
                 process_job(job["id"], worker_name=name)
             except Exception as e:
-                q.mark_failed(job["id"], f"worker crashed: {e}")
+                log.exception(f"worker {name} crashed on job {job['id']}")
+                q.mark_failed(job["id"], clean_error_text(f"worker crashed: {e}"))
         with self._pool_lock:
             self._workers.pop(name, None)
 

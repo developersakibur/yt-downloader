@@ -1,0 +1,529 @@
+/* base.css — design tokens, topbar, shell (rail/sidebar), buttons */
+/* ===== DESIGN TOKENS — "Live Telemetry" ===== */
+/* Signature: downloading cards glow along their left edge while active —
+   the card reads like a live signal, not just a static progress bar. */
+
+:root {
+  /* Dark theme (default) */
+  --bg:        #0B0E14;
+  --surface:   #131822;
+  --surface2:  #1B2230;
+  --surface3:  #232B3A;
+  --border:    #242C3A;
+  --border-hi: #323C4E;
+  --text:      #EDF1F7;
+  --muted:     #8A94A6;
+  --accent:    #2DD6B8;      /* electric teal — a live data stream, not an alert */
+  --accent-dim:rgba(45,214,184,0.14);
+  --accent-glow: rgba(45,214,184,0.35);
+  --green:    #34D399;
+  --yellow:   #F5A623;
+  --red:      #FF5470;       /* distinct rose-red — never shares a hue with accent */
+  --red-dim:  rgba(255,84,112,0.12);
+  --blue:     #5B8DEF;
+  --on-accent: #06110F;   /* text/icon color used on solid accent backgrounds */
+  --mono:     "DM Mono", "JetBrains Mono", ui-monospace, monospace;
+  --sans:     "DM Sans", system-ui, -apple-system, sans-serif;
+  --display:  "DM Sans", var(--sans);
+  --radius:   10px;
+  --radius-sm:6px;
+  --radius-lg:14px;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
+  --shadow-md: 0 4px 16px rgba(0,0,0,0.35);
+  --shadow-lg: 0 12px 32px rgba(0,0,0,0.45);
+  --shadow:   var(--shadow-md);
+  --ease:     cubic-bezier(.2,.8,.2,1);
+}
+
+[data-theme="light"] {
+  --bg:        #F3F5F8;
+  --surface:   #FFFFFF;
+  --surface2:  #F6F8FB;
+  --surface3:  #EDF0F5;
+  --border:    #DDE2EA;
+  --border-hi: #C6CDD9;
+  --text:      #161B26;
+  --muted:     #667085;
+  --accent-dim: rgba(13,148,130,0.10);
+  --red-dim:  rgba(225,29,72,0.08);
+  --shadow-sm: 0 1px 2px rgba(20,25,40,0.06);
+  --shadow-md: 0 4px 16px rgba(20,25,40,0.08);
+  --shadow-lg: 0 12px 32px rgba(20,25,40,0.12);
+  --shadow:   var(--shadow-md);
+}
+[data-theme="light"] { --accent: #0D9482; --red: #E11D48; --on-accent: #FFFFFF; }
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { font-size: 14px; }
+
+body {
+  background:
+    radial-gradient(1200px 600px at 15% -10%, rgba(45,214,184,0.06), transparent 60%),
+    var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  line-height: 1.5;
+  min-height: 100vh;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ===== TOPBAR ===== */
+.topbar {
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  z-index: 200;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 14px;
+}
+.rail-toggle {
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  width: 30px; height: 30px;
+  background: none; border: none; cursor: pointer;
+  flex-shrink: 0;
+}
+.rail-toggle span { display: block; width: 16px; height: 2px; background: var(--text); border-radius: 2px; }
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-shrink: 0;
+}
+.brand-icon {
+  width: 30px; height: 30px;
+  background: linear-gradient(135deg, var(--accent), #1FA891);
+  color: var(--on-accent);
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 13px; font-weight: 800;
+  box-shadow: 0 0 0 1px rgba(45,214,184,0.25), 0 4px 12px rgba(45,214,184,0.25);
+  flex-shrink: 0;
+}
+.brand-name {
+  font-family: var(--display);
+  font-weight: 700; font-size: 15.5px;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+}
+.brand-ver {
+  font-size: 10.5px; font-family: var(--mono);
+  color: var(--accent);
+  background: var(--accent-dim);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 4px; padding: 1px 6px;
+  font-weight: 600;
+}
+
+.live-stats {
+  display: flex; gap: 6px; flex: 1;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.live-stats::-webkit-scrollbar { display: none; }
+.stat-chip {
+  display: flex; align-items: center; gap: 5px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 3px 10px;
+  font-size: 12px;
+  flex-shrink: 0;
+  transition: border-color 0.2s var(--ease), background 0.2s var(--ease);
+}
+.stat-chip--active { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.stat-chip--done   { border-color: color-mix(in srgb, var(--green) 45%, var(--border)); }
+.stat-chip--fail   { border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
+.stat-chip--speed  { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.stat-num { font-family: var(--mono); font-weight: 700; font-size: 13px; }
+.stat-lbl { color: var(--muted); }
+
+.header-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.server-pill {
+  font-size: 11px; font-family: var(--mono);
+  color: var(--green); cursor: default;
+  display: inline-flex; align-items: center; gap: 5px;
+}
+.server-pill::before {
+  content: ""; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+}
+.server-pill.offline { color: var(--red); }
+.server-pill.offline::before { background: var(--red); box-shadow: 0 0 6px var(--red); }
+.btn-icon {
+  background: var(--surface2); border: 1px solid var(--border); color: var(--text);
+  width: 34px; height: 34px; border-radius: var(--radius-sm);
+  cursor: pointer; font-size: 14px;
+  display: flex; align-items: center; justify-content: center;
+  transition: border-color 0.15s var(--ease), background 0.15s var(--ease), transform 0.15s var(--ease), color 0.15s var(--ease);
+  flex-shrink: 0;
+}
+.btn-icon:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); transform: translateY(-1px); }
+.btn-icon:active { transform: translateY(0); }
+.btn-icon:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+
+/* ===== SHELL: rail + sidebar drawer + main ===== */
+.shell {
+  display: grid;
+  grid-template-columns: 64px 300px 1fr;
+  align-items: start;
+  min-height: calc(100vh - 52px);
+}
+
+/* ===== ICON RAIL (repurposed .tab-bar) ===== */
+.tab-bar {
+  grid-column: 1;
+  position: sticky; top: 52px;
+  height: calc(100vh - 52px);
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  align-items: stretch;
+  padding: 10px 8px;
+  gap: 4px;
+  z-index: 90;
+}
+.tab, .rail-btn {
+  background: none; border: 1px solid transparent;
+  color: var(--muted); font-family: var(--sans);
+  cursor: pointer;
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 10px 4px 8px;
+  min-height: 44px;
+  border-radius: var(--radius-sm);
+  font-size: 10px; font-weight: 600;
+  transition: color 0.15s var(--ease), background 0.15s var(--ease), border-color 0.15s var(--ease);
+  position: relative;
+}
+.tab-ico { width: 19px; height: 19px; flex-shrink: 0; }
+
+.ico { width: 14px; height: 14px; flex-shrink: 0; vertical-align: -2px; margin-right: 4px; }
+.ico:only-child { margin-right: 0; }
+.empty-icon .ico { width: 36px; height: 36px; margin-right: 0; opacity: 0.4; }
+#theme-btn .ico, .batch-item-thumb-placeholder .ico { width: 18px; height: 18px; margin-right: 0; }
+.group-toggle .ico { width: 12px; height: 12px; margin-right: 0; }
+#cookie-icon .ico { width: 15px; height: 15px; margin-right: 0; vertical-align: -3px; }
+.tab:hover, .rail-btn:hover { color: var(--text); background: var(--surface2); border-color: var(--border-hi); }
+.tab.active { color: var(--accent); background: var(--accent-dim); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+.tab:focus-visible, .rail-btn:focus-visible { outline: none; border-color: var(--accent); }
+.tab-badge {
+  position: absolute; top: 4px; right: 10px;
+  background: var(--red); color: #fff;
+  font-size: 9px; font-weight: 700;
+  min-width: 14px; height: 14px; border-radius: 7px;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0 3px;
+}
+.rail-btn.tab--new {
+  margin-top: auto;
+  color: var(--on-accent);
+  background: var(--accent);
+  transition: transform 0.15s var(--ease), box-shadow 0.15s var(--ease);
+}
+.rail-btn.tab--new:hover { transform: translateY(-1px); box-shadow: 0 6px 16px var(--accent-glow); background: var(--accent); color: var(--on-accent); }
+
+/* ===== SIDEBAR DRAWER ===== */
+.drawer-backdrop {
+  display: none;
+  position: fixed; inset: 0;
+  background: rgba(3,5,9,0.55);
+  z-index: 150;
+}
+.drawer-backdrop.open { display: block; }
+
+.sidebar {
+  grid-column: 2;
+  position: sticky;
+  top: 52px;
+  height: calc(100vh - 52px);
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+  overflow: hidden;
+}
+.sidebar-scroll {
+  height: 100%;
+  overflow-y: auto;
+  padding: 14px;
+  display: flex; flex-direction: column; gap: 12px;
+}
+
+.cookie-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12px; color: var(--muted);
+}
+.cookie-bar.synced { border-color: var(--green); color: var(--green); }
+.cookie-bar.synced #cookie-icon { color: var(--green); }
+
+.form-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 14px;
+  display: flex; flex-direction: column; gap: 11px;
+  box-shadow: var(--shadow-sm);
+}
+.form-title {
+  font-family: var(--display);
+  font-size: 14px; font-weight: 700; letter-spacing: -0.005em;
+}
+
+.field { display: flex; flex-direction: column; gap: 5px; }
+.field-label { font-size: 12px; color: var(--muted); font-weight: 500; text-transform: uppercase; letter-spacing: 0.04em; }
+
+.url-input {
+  width: 100%; padding: 9px 11px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text); font-size: 13px; font-family: var(--sans);
+  outline: none; transition: border-color 0.15s;
+}
+.url-input:hover { border-color: var(--border-hi); }
+.url-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+.url-input::placeholder { color: var(--muted); }
+
+.url-hint { font-size: 12px; color: var(--muted); }
+.url-hint:empty { display: none; }
+.url-hint.error { color: var(--red); }
+
+/* Local Batch Converter (sidebar mini-form) */
+.converter-card { margin-top: 14px; }
+.path-text-input {
+  width: 100%; padding: 9px 11px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text); font-size: 13px; font-family: var(--mono);
+  outline: none; transition: border-color 0.15s;
+}
+.path-text-input:hover { border-color: var(--border-hi); }
+.path-text-input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+.path-text-input::placeholder { color: var(--muted); font-family: var(--sans); }
+.checkbox-row {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; color: var(--text); cursor: pointer; user-select: none;
+  padding: 3px 4px; margin: -3px -4px; border-radius: 6px;
+  transition: background 0.15s var(--ease);
+}
+.checkbox-row:hover { background: var(--surface2); }
+.checkbox-row input { width: 15px; height: 15px; cursor: pointer; accent-color: var(--accent); }
+.convert-hint { font-size: 12px; color: var(--muted); min-height: 16px; }
+.convert-hint.error { color: var(--red); }
+
+.seg {
+  display: flex; gap: 4px; flex-wrap: wrap;
+}
+#format-seg { flex-wrap: nowrap; }
+#format-seg .seg-opt { flex: 1; }
+#format-seg .seg-opt span { width: 100%; text-align: center; }
+.seg-opt { display: flex; }
+.seg-opt input { display: none; }
+.seg-opt span {
+  display: block; padding: 8px 10px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12px; cursor: pointer;
+  transition: all 0.15s;
+  user-select: none;
+}
+.seg-opt span small { color: var(--muted); font-size: 10px; margin-left: 2px; }
+.seg-opt input:checked + span {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+  font-weight: 700;
+}
+.seg-opt input:checked + span small { color: rgba(6,17,15,0.65); }
+.seg-opt span:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-dim); }
+.seg-opt input:checked + span:hover { color: var(--on-accent); background: var(--accent); }
+.seg-opt input:focus-visible + span { outline: none; box-shadow: 0 0 0 2px var(--accent-dim); }
+
+/* Canonical PRIMARY button — filled accent, lift + glow on hover */
+.btn-primary {
+  width: 100%; padding: 10px;
+  background: var(--accent);
+  color: var(--on-accent); border: none;
+  border-radius: var(--radius-sm);
+  font-size: 13px; font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.15s var(--ease), box-shadow 0.15s var(--ease), background 0.15s var(--ease);
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  box-shadow: 0 1px 0 rgba(255,255,255,0.15) inset;
+}
+.btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-primary:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px var(--accent-glow), 0 1px 0 rgba(255,255,255,0.15) inset;
+  background: color-mix(in srgb, var(--accent) 92%, white);
+}
+.btn-primary:not(:disabled):active { transform: translateY(0); }
+.btn-primary:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent); }
+
+.scan-spinner { font-size: 12px; font-family: var(--mono); animation: pulse 1s infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+/* Canonical GHOST button — text-only, tertiary actions. No hardcoded
+   margin/hover-color here: those belong to the specific context that
+   needs them (see .cookie-bar .btn-text and .btn-danger-ghost below).
+   A shared class baking in "push me right" or "turn red" broke any row
+   that used more than one of these together (e.g. Select all / Deselect
+   all both trying to margin-left:auto, and both alarmingly turning red
+   on hover even though neither is destructive). */
+.btn-text {
+  background: none; border: none; color: var(--muted);
+  font-size: 11px; cursor: pointer; text-decoration: none;
+  padding: 5px 8px; border-radius: 6px;
+  transition: color 0.15s var(--ease), background 0.15s var(--ease);
+}
+.btn-text:hover { color: var(--accent); background: var(--accent-dim); }
+.cookie-bar .btn-text { margin-left: auto; }
+
+/* Neutral small toolbar action (Select all / Deselect all, etc.) —
+   pill-shaped, subtle border, accent tint on hover. Never red: hover
+   color communicates "non-destructive" at a glance. */
+.btn-toolbar {
+  background: var(--surface2); color: var(--text);
+  border: 1px solid var(--border); border-radius: 999px;
+  font-size: 11px; font-weight: 600; cursor: pointer;
+  padding: 6px 13px;
+  transition: border-color 0.15s var(--ease), color 0.15s var(--ease), background 0.15s var(--ease);
+}
+.btn-toolbar:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-dim, rgba(127,127,127,0.08)); }
+.btn-toolbar:active { transform: translateY(1px); }
+
+/* Small destructive ghost action (Delete a pending scan, etc.) — plain
+   until hovered, then unmistakably red. Reserved for actions that
+   actually delete/discard something. */
+.btn-danger-ghost {
+  background: transparent; color: var(--muted);
+  border: 1px solid var(--border); border-radius: 6px;
+  font-size: 11px; font-weight: 600; cursor: pointer;
+  padding: 5px 11px;
+  display: inline-flex; align-items: center; gap: 4px;
+  transition: color 0.15s var(--ease), background 0.15s var(--ease), border-color 0.15s var(--ease);
+}
+.btn-danger-ghost:hover { color: var(--red); background: var(--red-dim); border-color: var(--red); }
+.btn-danger-ghost:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ===== SCROLLBAR — themed to match surface/accent instead of the
+   browser default, so it doesn't clash with dark/light mode. ===== */
+* {
+  scrollbar-width: thin;                              /* Firefox */
+  scrollbar-color: var(--border-hi) transparent;      /* Firefox */
+}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border-hi);
+  border-radius: 8px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-corner { background: transparent; }
+
+/* ===== CUSTOM SELECT BOX ===== */
+/* Removes the native OS-styled dropdown box + arrow and draws our own
+   chevron instead, so every <select> in the app (quality/format
+   pickers, history filters, settings) looks consistent instead of
+   relying on the browser/OS default control.
+   Note: this only restyles the CLOSED box — the open options list is
+   still rendered natively by the browser and can't be fully skinned
+   with CSS alone. */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M6 9l6 6 6-6' fill='none' stroke='%238A94A6' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  background-size: 15px;
+  padding-right: 28px !important;
+}
+select:hover  { border-color: var(--accent); }
+select:focus  { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+select:disabled { opacity: 0.5; cursor: not-allowed; }
+/* Firefox keeps a focus dotted line inside the box unless cleared */
+select:-moz-focusring { color: transparent; text-shadow: 0 0 0 var(--text); }
+/* Options list background/text — browser still owns the popup chrome,
+   but these two properties are respected on most platforms. */
+select option {
+  background: var(--surface2);
+  color: var(--text);
+}
+
+/* ===== CUSTOM SELECT WIDGET (custom-select.js) =====
+   The native <select> above is the fallback shown only if JS never
+   runs. Once custom-select.js enhances it, the select is hidden and
+   this markup takes over — fully custom closed box AND open list. */
+.csel { position: relative; display: block; }
+.csel--sm { display: inline-block; }
+
+.csel-trigger {
+  width: 100%; box-sizing: border-box;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: inherit; font-size: 13px;
+  padding: 9px 10px;
+  min-height: 38px;
+  cursor: pointer;
+  transition: border-color 0.15s var(--ease), background 0.15s var(--ease), color 0.15s var(--ease);
+}
+.csel--sm .csel-trigger { padding: 6px 10px; font-size: 12px; min-height: 32px; }
+.csel-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.csel-chevron { width: 14px; height: 14px; flex-shrink: 0; color: var(--muted); transition: transform 0.15s var(--ease), color 0.15s var(--ease); }
+.csel-trigger:hover { border-color: var(--accent); color: var(--accent); }
+.csel-trigger:hover .csel-chevron { color: var(--accent); }
+.csel.open .csel-trigger { border-color: var(--accent); }
+.csel.open .csel-chevron { transform: rotate(180deg); }
+.csel-trigger.disabled { opacity: 0.5; cursor: not-allowed; }
+.csel-trigger:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+
+.csel-list {
+  position: absolute; z-index: 60; left: 0; right: 0; top: calc(100% + 4px);
+  max-height: 260px; overflow-y: auto;
+  background: var(--surface2);
+  border: 1px solid var(--border-hi);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 12px 28px rgba(0,0,0,0.35);
+  padding: 4px; margin: 0; list-style: none;
+}
+.csel-list[hidden] { display: none; }
+.csel-option {
+  padding: 8px 10px; border-radius: 6px;
+  font-size: 13px; color: var(--text);
+  cursor: pointer; user-select: none;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: background 0.1s var(--ease), color 0.1s var(--ease);
+}
+.csel--sm .csel-option { padding: 6px 8px; font-size: 12px; }
+.csel-option:hover,
+.csel-option.active { background: var(--surface3); }
+.csel-option.selected { background: var(--accent-dim); color: var(--accent); font-weight: 600; }
+.csel-option.selected:hover,
+.csel-option.selected.active { background: var(--accent-dim); }
+.csel-option.disabled { opacity: 0.4; cursor: not-allowed; }
+.csel-option.disabled:hover { background: none; }
+
+

@@ -29,6 +29,10 @@ import cookies as ck     # noqa: E402
 import job_queue as q        # noqa: E402
 import scanner            # noqa: E402
 import converter           # noqa: E402
+import glob                # noqa: E402
+from logging_setup import get_logger, _LOG_FILE  # noqa: E402
+
+log = get_logger("routes")
 
 api = Blueprint("api", __name__, url_prefix="/api")
 
@@ -112,7 +116,8 @@ def _run_preview(scan_id, preview_id, url, quantity, force_playlist, format, qua
         with _scan_lock:
             _scan_registry[scan_id] = {
                 "status": "done",
-                "result": {"preview_id": preview_id, "video_count": len(result["entries"])},
+                "result": {"preview_id": preview_id, "video_count": len(result["entries"]),
+                       "stopped_early": result.get("stopped_early", False)},
                 "error": None,
                 "progress": _scan_registry.get(scan_id, {}).get("progress"),
             }
@@ -120,6 +125,7 @@ def _run_preview(scan_id, preview_id, url, quantity, force_playlist, format, qua
         # Scan failed partway — whatever entries already streamed into
         # the preview stay there (partial-approve is allowed), we just
         # flip it out of 'scanning' so the UI stops waiting for more.
+        log.exception(f"preview scan failed for {url}")
         db.finish_preview_scan(preview_id)
         with _scan_lock:
             _scan_registry[scan_id] = {"status": "error", "result": None, "error": str(e), "progress": None}
@@ -309,6 +315,16 @@ _VALID_ACTIONS = {
 # Completed, cancelled, skipped → History only
 _QUEUE_STATUSES = ["queued", "downloading", "converting", "paused", "failed"]
 
+@api.route("/queue/pause-all", methods=["POST"])
+def pause_all_jobs():
+    return jsonify({"ok": True, "paused": q.pause_all()})
+
+
+@api.route("/queue/resume-all", methods=["POST"])
+def resume_all_jobs():
+    return jsonify({"ok": True, "resumed": q.resume_all()})
+
+
 @api.route("/queue")
 def get_queue():
     _prune_ghost_jobs()
@@ -388,6 +404,7 @@ def get_group(group_id):
 
 _SETTINGS_VALIDATORS = {
     "concurrent_downloads": lambda v: 1 <= int(v) <= 10,
+    "converter_concurrency": lambda v: 1 <= int(v) <= 4,
     "default_format": lambda v: v.upper() in ("MP3", "MP4", "3GP"),
     "use_cookies_by_default": lambda v: str(v).lower() in ("0", "1", "true", "false"),
     "downloads_folder": lambda v: v == "" or os.path.isabs(v),  # empty = use default
@@ -460,7 +477,12 @@ def delete_cookies():
 def get_history():
     _prune_ghost_jobs()
     limit = request.args.get("limit", default=100, type=int)
-    return jsonify({"ok": True, "history": db.get_history(limit=limit)})
+    search = request.args.get("search", default="", type=str).strip()
+    status = request.args.get("status", default="", type=str).strip()  # completed/failed/cancelled
+    format_ = request.args.get("format", default="", type=str).strip().upper()
+    return jsonify({"ok": True, "history": db.get_history(
+        limit=limit, search=search or None, status=status or None, format=format_ or None
+    )})
 
 
 # ---------------------------------------------------------------
@@ -476,6 +498,48 @@ def get_stats():
 @api.route("/status")
 def get_status():
     return jsonify({"ok": True})
+
+
+@api.route("/logs")
+def get_logs():
+    """Tail the app.log file for the Logs tab. ?lines=N caps how many
+    of the most recent lines are returned (default 1000) — the file
+    itself can be rotated up to 5x5MB, way too much to ship to the
+    browser in one response."""
+    try:
+        lines = max(1, min(int(request.args.get("lines", 1000)), 5000))
+    except ValueError:
+        lines = 1000
+
+    if not os.path.exists(_LOG_FILE):
+        return jsonify({"ok": True, "text": "", "size": 0, "total_lines": 0, "truncated": False})
+
+    size = os.path.getsize(_LOG_FILE)
+    with open(_LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
+        all_lines = f.readlines()
+    tail = all_lines[-lines:]
+    return jsonify({
+        "ok": True,
+        "text": "".join(tail),
+        "size": size,
+        "total_lines": len(all_lines),
+        "truncated": len(all_lines) > len(tail),
+    })
+
+
+@api.route("/logs", methods=["DELETE"])
+def clear_logs():
+    """Empty app.log and remove any rotated backups (app.log.1 .. .5)
+    so 'Clear' actually frees the disk space, not just hides the tail."""
+    try:
+        if os.path.exists(_LOG_FILE):
+            open(_LOG_FILE, "w", encoding="utf-8").close()
+        for backup in glob.glob(_LOG_FILE + ".*"):
+            os.remove(backup)
+        log.info("log file cleared via UI")
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 # ---------------------------------------------------------------
@@ -507,8 +571,18 @@ def start_local_convert():
     if quality not in _CONVERT_QUALITIES[target_format]:
         quality = _CONVERT_QUALITIES[target_format][0]
 
+    # Concurrency: explicit per-request value wins, otherwise fall back
+    # to the person's saved default (Settings tab), otherwise 2.
+    concurrency = data.get("concurrency")
+    if concurrency is None:
+        concurrency = int(db.get_setting("converter_concurrency", 2))
     try:
-        result = converter.start_batch(path, target_format, quality, recursive=recursive)
+        concurrency = max(1, min(int(concurrency), 4))
+    except (TypeError, ValueError):
+        concurrency = 2
+
+    try:
+        result = converter.start_batch(path, target_format, quality, recursive=recursive, concurrency=concurrency)
     except ValueError as e:
         return jsonify({"ok": False, "error": str(e)}), 400
     except Exception as e:

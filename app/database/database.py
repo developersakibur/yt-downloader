@@ -34,6 +34,12 @@ def _connect():
     conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # WAL lets readers (UI polling) and writers (worker threads updating
+    # progress) proceed concurrently instead of blocking each other —
+    # matters a lot here since progress/speed get written every ~second
+    # per active job while the UI is simultaneously polling /api/queue.
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = NORMAL")  # safe pairing with WAL, still crash-safe
     return conn
 
 
@@ -94,6 +100,7 @@ def _migrate(conn):
         "ALTER TABLE local_conversion_jobs ADD COLUMN conversion_speed_x REAL",
         "ALTER TABLE pending_previews ADD COLUMN scan_status TEXT NOT NULL DEFAULT 'complete'",
         "ALTER TABLE video_jobs ADD COLUMN convert_percent REAL",
+        "ALTER TABLE video_jobs ADD COLUMN next_retry_at TEXT",
     ]
     _migrate_local_conversion_status(conn)
 
@@ -399,9 +406,22 @@ def set_cookies_status(synced, cookie_count=0):
 # HISTORY
 # =================================================================
 
-def get_history(limit=100):
+def get_history(limit=100, search=None, status=None, format=None):
+    where = []
+    params = []
+    if search:
+        where.append("(original_title LIKE ? OR uploader LIKE ? OR group_name LIKE ?)")
+        like = f"%{search}%"
+        params.extend([like, like, like])
+    if status:
+        where.append("status = ?")
+        params.append(status)
+    if format:
+        where.append("format = ?")
+        params.append(format)
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
     with cursor() as cur:
-        cur.execute("SELECT * FROM history_view LIMIT ?", (limit,))
+        cur.execute(f"SELECT * FROM history_view {where_sql} ORDER BY updated_at DESC LIMIT ?", params + [limit])
         return _rows_to_dicts(cur.fetchall())
 
 
@@ -480,6 +500,32 @@ def get_local_conversion_job(job_id):
 def delete_local_conversion_job(job_id):
     with cursor(write=True) as cur:
         cur.execute("DELETE FROM local_conversion_jobs WHERE id = ?", (job_id,))
+
+
+def is_video_already_downloaded(video_id):
+    """True if this video_id has a 'completed' job anywhere in history —
+    used to flag likely duplicates in the Approve tab so the person can
+    consciously skip or re-download instead of doing it by accident."""
+    if not video_id:
+        return False
+    with cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM video_jobs WHERE video_id = ? AND status = 'completed' LIMIT 1",
+            (video_id,),
+        )
+        return cur.fetchone() is not None
+
+
+def get_jobs_due_for_retry():
+    """Failed jobs whose backoff timer has elapsed — picked up by the
+    retry-sweep loop in worker.py and automatically requeued."""
+    with cursor() as cur:
+        cur.execute(
+            "SELECT * FROM video_jobs WHERE status = 'failed' "
+            "AND next_retry_at IS NOT NULL AND next_retry_at <= ?",
+            (_now(),),
+        )
+        return _rows_to_dicts(cur.fetchall())
 
 
 # =================================================================

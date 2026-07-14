@@ -1,0 +1,66 @@
+/* responsive.css — tablet/mobile breakpoints (keep last: overrides earlier files) */
+/* ===== RESPONSIVE ===== */
+
+/* Tablet: sidebar becomes an off-canvas drawer, rail stays as a left column */
+@media (max-width: 1099px) {
+  .shell { grid-template-columns: 64px 1fr; }
+  .rail-toggle { display: flex; }
+
+  .sidebar {
+    grid-column: 1 / -1;
+    position: fixed;
+    top: 52px; left: 64px; bottom: 0;
+    width: min(340px, calc(100vw - 64px));
+    height: auto;
+    z-index: 160;
+    transform: translateX(-110%);
+    transition: transform 0.25s var(--ease);
+    box-shadow: var(--shadow-lg);
+  }
+  .sidebar.open { transform: translateX(0); }
+}
+
+/* Mobile: rail collapses to a bottom bar, sidebar becomes a bottom sheet */
+@media (max-width: 699px) {
+  .topbar { gap: 10px; padding: 0 10px; }
+  .brand-name { display: none; }
+  .live-stats { display: none; }
+  .rail-toggle { display: none; }
+
+  .shell { grid-template-columns: 1fr; padding-bottom: 60px; }
+
+  .tab-bar {
+    position: fixed; top: auto; bottom: 0; left: 0; right: 0;
+    height: 58px; width: 100%;
+    flex-direction: row;
+    align-items: stretch;
+    border-right: none;
+    border-top: 1px solid var(--border);
+    padding: 4px 4px;
+    z-index: 190;
+  }
+  .tab, .rail-btn { flex: 1; padding: 8px 2px; min-height: 48px; }
+  .rail-btn.tab--new { margin-top: 0; border-radius: var(--radius-sm); }
+
+  .main { grid-column: 1; }
+  .tab-panel { padding: 14px 12px 30px; }
+
+  .sidebar {
+    left: 0; right: 0; top: auto; bottom: 0;
+    width: 100%; max-height: 82vh;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    transform: translateY(110%);
+    border-right: none;
+    border-top: 1px solid var(--border);
+  }
+  .sidebar.open { transform: translateY(0); }
+
+  .panel-head { flex-direction: column; align-items: stretch; }
+  .panel-actions { justify-content: flex-start; }
+  .settings-grid { grid-template-columns: 1fr !important; }
+}
+
+/* Small phones: tighten stat chips further, single column always */
+@media (max-width: 400px) {
+  .brand-ver { display: none; }
+}

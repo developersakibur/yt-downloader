@@ -17,8 +17,13 @@ import uuid
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "database"))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "downloader"))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import database as db     # noqa: E402
 import worker as _worker  # noqa: E402  — reused for ffmpeg_convert, sanitize_name, quality helpers
+from errors import clean_error_text  # noqa: E402
+from logging_setup import get_logger  # noqa: E402
+
+log = get_logger("converter")
 
 ALLOWED_VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv", ".wmv", ".m4v", ".3gp"}
 
@@ -315,6 +320,7 @@ def _convert_one(job: dict):
             # 'deleted' intent: row is removed by the route handler itself,
             # nothing left to update here.
         else:
-            db.update_local_conversion_job(job_id, status="failed", error_message=str(e))
+            db.update_local_conversion_job(job_id, status="failed", error_message=clean_error_text(e))
+            log.exception(f"conversion job {job_id} failed ({job.get('source_path')})")
     finally:
         _unregister_process(job_id)
